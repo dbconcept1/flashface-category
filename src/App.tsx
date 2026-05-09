@@ -11,7 +11,7 @@ import { PromptsView } from './views/PromptsView';
 import { DiscoveryView } from './views/DiscoveryView';
 import { cn } from './utils';
 import { Target, LayoutGrid, BarChart2, Plus, Settings2, Sparkles, FileText, DownloadCloud, Loader2, Terminal, Radar, Menu, Activity, CheckCircle2, AlertCircle, Cloud } from 'lucide-react';
-import { agenticDeepResearchCategory, discoverDtcCategories } from './services/aiService';
+import { agenticDeepResearchCategory, discoverDtcCategories, createInitialProgress } from './services/aiService';
 import stringSimilarity from 'string-similarity';
 import { lsLoadCategories, saveAllLayers, loadBestCategories } from './lib/db';
 
@@ -45,11 +45,13 @@ export default function App() {
 
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isBulkResearching, setIsBulkResearching] = useState(false);
+  const [bulkStats, setBulkStats] = useState<{ total: number; done: number; failed: number } | null>(null);
   const [isMainSidebarOpen, setIsMainSidebarOpen] = useState(true);
   const [discoveryProgress, setDiscoveryProgress] = useState<import('./services/aiService').DiscoveryProgress | null>(null);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const bulkResearchAbortRef = useRef<AbortController | null>(null);
+  const bulkCallbackRef = useRef<((succeeded: boolean) => void) | null>(null);
   const categoriesRef = useRef(categories);
 
   useEffect(() => {
@@ -131,21 +133,28 @@ export default function App() {
   const handleDeepSearch = async (id: string) => {
     const category = categoriesRef.current.find(c => c.id === id);
     if (!category) return;
-    
+
+    // Transition queued → running (preserve agent list from queued initial state)
+    setEnhancingIds(prev => {
+      const existing = prev[id];
+      return {
+        ...prev,
+        [id]: { ...(existing || createInitialProgress()), __state: 'running', overall: 'Preparing agents...' }
+      };
+    });
+
+    let succeeded = false;
     try {
       const enriched = await agenticDeepResearchCategory(
-        category, 
-        (progress) => setEnhancingIds(prev => ({ ...prev, [id]: progress })),
+        category,
+        (progress) => setEnhancingIds(prev => ({ ...prev, [id]: { ...progress, __state: 'running' } })),
         (partialUpdate) => {
           setCategories(prev => prev.map(c => {
             if (c.id === id) {
               return {
                 ...c,
                 ...partialUpdate,
-                agentResults: {
-                  ...(c.agentResults || {}),
-                  ...(partialUpdate.agentResults || {})
-                },
+                agentResults: { ...(c.agentResults || {}), ...(partialUpdate.agentResults || {}) },
                 lastUpdated: new Date().toISOString()
               };
             }
@@ -153,32 +162,76 @@ export default function App() {
           }));
         }
       );
-      
+
+      succeeded = true;
+      setEnhancingIds(prev => ({
+        ...prev,
+        [id]: { ...(prev[id] || createInitialProgress()), __state: 'done', overall: 'All 7 agents complete' }
+      }));
       setCategories(prev => prev.map(c => {
         if (c.id === id) {
           return {
             ...c,
             ...enriched,
-            agentResults: {
-              ...(c.agentResults || {}),
-              ...(enriched.agentResults || {})
-            },
+            agentResults: { ...(c.agentResults || {}), ...(enriched.agentResults || {}) },
             lastUpdated: new Date().toISOString()
           };
         }
         return c;
       }));
     } catch (e: any) {
-      alert("Deep Search API Error: " + e.message);
+      // Store error in state — no alert, no auto-clear. Stays red until user retries.
+      setEnhancingIds(prev => ({
+        ...prev,
+        [id]: {
+          ...(prev[id] || createInitialProgress()),
+          __state: 'error',
+          __error: e.message,
+          overall: e.message?.slice(0, 100) || 'Unknown error'
+        }
+      }));
     } finally {
-      setTimeout(() => {
-        setEnhancingIds(prev => {
-          const next = { ...prev };
-          delete next[id];
-          return next;
-        });
-      }, 3000); // Leave success message visible for 3 seconds
+      // Notify bulk queue tracker
+      bulkCallbackRef.current?.(succeeded);
+      // Auto-clear success state after 4s — errors persist until re-run
+      if (succeeded) {
+        setTimeout(() => {
+          setEnhancingIds(prev => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+          });
+        }, 4000);
+      }
     }
+  };
+
+  /** Set up a bulk research run: pre-populate queued state, wire stats callback. Returns AbortController. */
+  const initBulkResearch = (toResearch: Category[]) => {
+    const total = toResearch.length;
+    const counter = { done: 0, failed: 0 };
+    setBulkStats({ total, done: 0, failed: 0 });
+    // Pre-populate all items as queued so rows immediately show they're in line
+    setEnhancingIds(prev => {
+      const next = { ...prev };
+      toResearch.forEach((c, i) => {
+        next[c.id] = {
+          ...createInitialProgress(),
+          __state: 'queued',
+          overall: `Queued — position ${i + 1} of ${total}`
+        };
+      });
+      return next;
+    });
+    bulkCallbackRef.current = (succeeded: boolean) => {
+      if (succeeded) counter.done++;
+      else counter.failed++;
+      setBulkStats({ total, done: counter.done, failed: counter.failed });
+    };
+    const controller = new AbortController();
+    bulkResearchAbortRef.current = controller;
+    setIsBulkResearching(true);
+    return controller;
   };
 
   const processWithConcurrency = (items: Category[], concurrency: number, action: (id: string) => Promise<void>, signal?: AbortSignal): Promise<void> => {
@@ -209,36 +262,53 @@ export default function App() {
   const handleDeepSearchAllNew = () => {
     const toResearch = categories.filter(c => c.status !== 'Killed' && !c.agentResults?.unitEconomics);
     if (toResearch.length === 0) return;
-    const controller = new AbortController();
-    bulkResearchAbortRef.current = controller;
-    setIsBulkResearching(true);
+    const controller = initBulkResearch(toResearch);
     processWithConcurrency(toResearch, 1, handleDeepSearch, controller.signal)
-      .finally(() => { setIsBulkResearching(false); bulkResearchAbortRef.current = null; });
+      .finally(() => {
+        setIsBulkResearching(false);
+        bulkResearchAbortRef.current = null;
+        bulkCallbackRef.current = null;
+        setTimeout(() => setBulkStats(null), 8000);
+      });
   };
 
   const handleRefreshFailed = () => {
     const toRefresh = categories.filter(c => c.status !== 'Killed' && hasIncompleteAgents(c));
     if (toRefresh.length === 0) { alert('No failed or incomplete agent results found.'); return; }
-    const controller = new AbortController();
-    bulkResearchAbortRef.current = controller;
-    setIsBulkResearching(true);
+    const controller = initBulkResearch(toRefresh);
     processWithConcurrency(toRefresh, 1, handleDeepSearch, controller.signal)
-      .finally(() => { setIsBulkResearching(false); bulkResearchAbortRef.current = null; });
+      .finally(() => {
+        setIsBulkResearching(false);
+        bulkResearchAbortRef.current = null;
+        bulkCallbackRef.current = null;
+        setTimeout(() => setBulkStats(null), 8000);
+      });
   };
 
   const handleRefreshResearched = () => {
     const toRefresh = categories.filter(c => c.status !== 'Killed' && !!c.agentResults?.unitEconomics);
     if (toRefresh.length === 0) return;
-    const controller = new AbortController();
-    bulkResearchAbortRef.current = controller;
-    setIsBulkResearching(true);
+    const controller = initBulkResearch(toRefresh);
     processWithConcurrency(toRefresh, 1, handleDeepSearch, controller.signal)
-      .finally(() => { setIsBulkResearching(false); bulkResearchAbortRef.current = null; });
+      .finally(() => {
+        setIsBulkResearching(false);
+        bulkResearchAbortRef.current = null;
+        bulkCallbackRef.current = null;
+        setTimeout(() => setBulkStats(null), 8000);
+      });
   };
 
   const handleStopBulkResearch = () => {
     if (bulkResearchAbortRef.current) {
       bulkResearchAbortRef.current.abort();
+      // Clear all queued-but-not-started items immediately
+      setEnhancingIds(prev => {
+        const next = { ...prev };
+        Object.keys(next).forEach(id => {
+          if (next[id]?.__state === 'queued') delete next[id];
+        });
+        return next;
+      });
     }
   };
 
@@ -448,7 +518,41 @@ export default function App() {
               </h1>
             </div>
             
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3">                {/* Bulk research progress — visible on every tab while a queue is running */}
+                {(isBulkResearching || bulkStats) && (
+                  <div className={cn(
+                    "hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono border",
+                    isBulkResearching
+                      ? "bg-orange-500/10 border-orange-500/25 text-orange-400"
+                      : bulkStats && bulkStats.failed > 0
+                      ? "bg-rose-500/10 border-rose-500/25 text-rose-400"
+                      : "bg-emerald-500/10 border-emerald-500/25 text-emerald-400"
+                  )}>
+                    {isBulkResearching
+                      ? <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                      : bulkStats && bulkStats.failed > 0
+                      ? <AlertCircle className="w-3 h-3 shrink-0" />
+                      : <CheckCircle2 className="w-3 h-3 shrink-0" />
+                    }
+                    <span>
+                      {isBulkResearching
+                        ? bulkStats
+                          ? `Researching ${bulkStats.done + bulkStats.failed}/${bulkStats.total}`
+                          : 'Starting queue...'
+                        : bulkStats && bulkStats.failed > 0
+                        ? `Done — ${bulkStats.done} ok, ${bulkStats.failed} failed`
+                        : `Done — ${bulkStats?.done ?? 0} researched`
+                      }
+                    </span>
+                    {isBulkResearching && (
+                      <button
+                        onClick={handleStopBulkResearch}
+                        className="ml-1 text-gray-500 hover:text-rose-400 transition-colors font-bold"
+                        title="Stop bulk research"
+                      >×</button>
+                    )}
+                  </div>
+                )}
               {/* Save status + category count indicator */}
               <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-gray-900 border border-gray-800 rounded-lg text-xs font-mono">
                 <Cloud className="w-3 h-3 text-gray-500" />
@@ -480,6 +584,8 @@ export default function App() {
                     <WeightSlider name="Acquisition Ease" value={weights.acquisition} min={0} max={50} onChange={v => setWeights({...weights, acquisition: v})} />
                     <WeightSlider name="Market Size" value={weights.marketSize} min={0} max={50} onChange={v => setWeights({...weights, marketSize: v})} />
                     <WeightSlider name="Emotional Loyalty" value={weights.loyalty} min={0} max={50} onChange={v => setWeights({...weights, loyalty: v})} />
+                    <WeightSlider name="Story Depth & Moat" value={weights.storyDepth} min={0} max={50} onChange={v => setWeights({...weights, storyDepth: v})} />
+                    <WeightSlider name="Micro-niche Potential" value={weights.microNiche} min={0} max={50} onChange={v => setWeights({...weights, microNiche: v})} />
                   </div>
                   <div className="mt-6 pt-4 border-t border-gray-800 text-center">
                     <p className="text-xs text-gray-500">These parameters drive the "Overall Decision Score"</p>
@@ -493,7 +599,7 @@ export default function App() {
           {/* Scrollable Context */}
           <main className={cn("flex-1 scroll-smooth relative", currentView === 'categories' ? 'overflow-hidden' : 'overflow-y-auto p-8')}>
             {currentView === 'dashboard' && <DashboardView categories={categories} weights={ weights} maxClv={maxClv} />}
-            {currentView === 'categories' && <CategoriesView categories={categories} weights={weights} maxClv={maxClv} onEdit={openEditor} onUpdateStatus={handleUpdateStatus} onDeepSearch={handleDeepSearch} onDeepSearchAllNew={handleDeepSearchAllNew} onRefreshResearched={handleRefreshResearched} onRefreshFailed={handleRefreshFailed} onStopBulkResearch={handleStopBulkResearch} isBulkResearching={isBulkResearching} enhancingIds={enhancingIds} />}
+            {currentView === 'categories' && <CategoriesView categories={categories} weights={weights} maxClv={maxClv} onEdit={openEditor} onUpdateStatus={handleUpdateStatus} onDeepSearch={handleDeepSearch} onDeepSearchAllNew={handleDeepSearchAllNew} onRefreshResearched={handleRefreshResearched} onRefreshFailed={handleRefreshFailed} onStopBulkResearch={handleStopBulkResearch} isBulkResearching={isBulkResearching} bulkStats={bulkStats} enhancingIds={enhancingIds} />}
             {currentView === 'comparison' && <ComparisonView categories={categories} weights={weights} maxClv={maxClv} />}
             {currentView === 'import' && <ImportView onImport={handleImport} state={importState} setState={setImportState} existingCategories={categories} />}
             {currentView === 'discovery' && (
@@ -514,6 +620,17 @@ export default function App() {
                 onSave={handleSaveCategory}
                 onCancel={() => setCurrentView('categories')}
                 onDelete={handleDeleteCategory}
+                onPartialUpdate={(partial) => {
+                  if (!editingId) return;
+                  setCategories(prev => prev.map(c =>
+                    c.id === editingId ? {
+                      ...c,
+                      ...partial,
+                      agentResults: { ...(c.agentResults || {}), ...(partial.agentResults || {}) },
+                      lastUpdated: new Date().toISOString()
+                    } : c
+                  ));
+                }}
               />
             )}
           </main>

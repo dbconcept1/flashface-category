@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Category, Weights } from '../types';
 import { calculateDecisionScore, calculateLtvCac } from '../utils';
 
@@ -26,11 +27,12 @@ export function DashboardView({ categories, weights, maxClv }: Props) {
 
   const winner = categoriesWithScores.find(c => c.status === 'Winner');
 
-  // Top list
-  const topList = categoriesWithScores
+  // Top list — shows top 5 by default, expandable
+  const [showAllTopList, setShowAllTopList] = useState(false);
+  const topListAll = categoriesWithScores
     .filter(c => c.status !== 'Killed')
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5);
+    .sort((a, b) => b.score - a.score);
+  const topList = showAllTopList ? topListAll : topListAll.slice(0, 5);
 
   return (
     <div className="space-y-6">
@@ -118,6 +120,14 @@ export function DashboardView({ categories, weights, maxClv }: Props) {
                   ))}
                 </tbody>
              </table>
+             {topListAll.length > 5 && (
+               <button
+                 onClick={() => setShowAllTopList(v => !v)}
+                 className="w-full py-2 text-xs text-gray-500 hover:text-orange-400 border-t border-gray-800 transition-colors font-mono"
+               >
+                 {showAllTopList ? `▲ Show Top 5` : `▼ Show all ${topListAll.length} active`}
+               </button>
+             )}
           </div>
         </div>
       </div>

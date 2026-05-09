@@ -64,11 +64,21 @@ export function ImportView({ onImport, state, setState, existingCategories }: Pr
               return { ...s, tasks: next };
             });
 
-            const result = await extractCompanyFromImage({
-              imageData: task.imageData.data,
-              mimeType: task.imageData.mimeType,
-              existingCategoryNames: existingCategories.map(c => c.name)
-            });
+            const result = await extractCompanyFromImage(
+              {
+                imageData: task.imageData.data,
+                mimeType: task.imageData.mimeType,
+                existingCategoryNames: existingCategories.map(c => c.name)
+              },
+              (status) => {
+                setState(s => {
+                  const next = [...s.tasks];
+                  const idx = next.findIndex(t => t.id === task.id);
+                  if (idx !== -1) next[idx] = { ...next[idx], progressText: status };
+                  return { ...s, tasks: next };
+                });
+              }
+            );
 
             if (result && result.categoryParams && result.categoryParams.name && result.categoryParams.name !== 'Unknown Category') {
                onImport([result.categoryParams]);

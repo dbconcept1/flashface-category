@@ -50,4 +50,6 @@ export interface Weights {
   acquisition: number;
   marketSize: number;
   loyalty: number;
+  storyDepth: number;
+  microNiche: number;
 }

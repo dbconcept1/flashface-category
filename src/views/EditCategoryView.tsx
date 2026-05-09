@@ -11,10 +11,12 @@ interface Props {
   onSave: (cat: Category) => void;
   onCancel: () => void;
   onDelete?: (id: string) => void;
+  onPartialUpdate?: (update: Partial<Category>) => void;
 }
 
 const defaultCategory: Omit<Category, 'id' | 'lastUpdated'> = {
   name: '',
+  industry: '',
   targetAudience: '',
   realMonthlyConsumption: true,
   monthlyConsumptionReason: '',
@@ -22,6 +24,13 @@ const defaultCategory: Omit<Category, 'id' | 'lastUpdated'> = {
   estimatedCAC: 0,
   monthlyChurnPercent: 0,
   marketSizeNL: '',
+  marketSizeGlobal: '',
+  marketSizeEU: '',
+  audienceSizeNL: '',
+  cagr: '',
+  regulatoryRiskNL: 'Medium',
+  legalAndAdRestrictions: '',
+  researchSources: [],
   marketSizeScore: 50,
   acquisitionDifficulty: 'Medium',
   emotionalLoyalty: 'Medium',
@@ -33,7 +42,7 @@ const defaultCategory: Omit<Category, 'id' | 'lastUpdated'> = {
   notes: '',
 };
 
-export function EditCategoryView({ category, onSave, onCancel, onDelete }: Props) {
+export function EditCategoryView({ category, onSave, onCancel, onDelete, onPartialUpdate }: Props) {
   const [formData, setFormData] = useState<Partial<Category>>(category || defaultCategory);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhancingStatus, setEnhancingStatus] = useState<ResearchProgress | null>(null);
@@ -62,12 +71,19 @@ export function EditCategoryView({ category, onSave, onCancel, onDelete }: Props
   };
 
   const handleSave = () => {
-    if (!formData.name) return; // basic validation
+    if (!formData.name?.trim()) {
+      alert('Category name is required.');
+      return;
+    }
+    if (!formData.targetAudience?.trim()) {
+      alert('Target audience is required — it is used in every AI research prompt.');
+      return;
+    }
 
     const newCat: Category = {
       ...defaultCategory,
       ...formData,
-      id: formData.id || Math.random().toString(36).substr(2, 9),
+      id: formData.id || crypto.randomUUID(),
       lastUpdated: new Date().toISOString()
     } as Category;
 
@@ -83,12 +99,28 @@ export function EditCategoryView({ category, onSave, onCancel, onDelete }: Props
       setIsEnhancing(true);
       const enriched = await agenticDeepResearchCategory(
         formData as Category, 
-        (progress) => setEnhancingStatus(progress)
+        (progress) => setEnhancingStatus(progress),
+        (partialUpdate) => {
+          setFormData(prev => ({
+            ...prev,
+            ...partialUpdate,
+            agentResults: {
+              ...(prev.agentResults || {}),
+              ...(partialUpdate.agentResults || {})
+            }
+          }));
+          onPartialUpdate?.(partialUpdate);
+        }
       );
-      setFormData(prev => ({
-        ...prev,
+      const merged = {
         ...enriched,
-      }));
+        agentResults: {
+          ...(formData.agentResults || {}),
+          ...(enriched.agentResults || {})
+        }
+      };
+      setFormData(prev => ({ ...prev, ...merged }));
+      onPartialUpdate?.(merged);
     } catch (e: any) {
       alert("Deep Search API Error: " + e.message);
     } finally {
@@ -342,6 +374,16 @@ export function EditCategoryView({ category, onSave, onCancel, onDelete }: Props
                     className="w-full bg-transparent border-b border-dashed border-gray-800 text-gray-400 px-0 py-1 focus:outline-none font-mono text-xs"
                   />
                 </div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] text-gray-600 uppercase tracking-widest font-bold">CAGR</label>
+                <input 
+                  type="text" 
+                  value={formData.cagr || ''}
+                  onChange={e => handleChange('cagr', e.target.value)}
+                  placeholder="e.g. 12.5% or 10–15%"
+                  className="w-full bg-transparent border-b border-dashed border-gray-800 text-gray-400 px-0 py-1 focus:outline-none font-mono text-xs"
+                />
               </div>
             </div>
             <div>

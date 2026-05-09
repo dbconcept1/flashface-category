@@ -1,7 +1,7 @@
 import { useState, Fragment } from 'react';
 import { Category, Weights, CategoryStatus } from '../types';
 import { calculateDecisionScore, calculateLtvCac, cn, getMacroSector } from '../utils';
-import { LayoutGrid, List, Search, Filter, Ban, Trophy, Sparkles, Loader2, Square } from 'lucide-react';
+import { LayoutGrid, List, Search, Ban, Trophy, Sparkles, Loader2, Square, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 interface Props {
   categories: Category[];
@@ -15,10 +15,11 @@ interface Props {
   onRefreshFailed: () => void;
   onStopBulkResearch: () => void;
   isBulkResearching: boolean;
+  bulkStats: { total: number; done: number; failed: number } | null;
   enhancingIds: Record<string, any>;
 }
 
-export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateStatus, onDeepSearch, onDeepSearchAllNew, onRefreshResearched, onRefreshFailed, onStopBulkResearch, isBulkResearching, enhancingIds }: Props) {
+export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateStatus, onDeepSearch, onDeepSearchAllNew, onRefreshResearched, onRefreshFailed, onStopBulkResearch, isBulkResearching, bulkStats, enhancingIds }: Props) {
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('table');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<CategoryStatus | 'All'>('All');
@@ -213,7 +214,51 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
         </div>
       </div>
 
-        {/* Grid View */}
+      {/* Bulk research progress banner — shown between controls and content for both view modes */}
+      {(isBulkResearching || bulkStats) && (
+        <div className={cn(
+          "shrink-0 flex items-center justify-between px-4 py-2 border-b text-xs font-mono",
+          isBulkResearching
+            ? "bg-orange-500/5 border-orange-500/15 text-orange-400"
+            : bulkStats && bulkStats.failed > 0
+            ? "bg-rose-500/5 border-rose-500/15"
+            : "bg-emerald-500/5 border-emerald-500/15"
+        )}>
+          <div className="flex items-center gap-3">
+            {isBulkResearching
+              ? <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+              : bulkStats && bulkStats.failed > 0
+              ? <AlertCircle className="w-3 h-3 text-rose-400 shrink-0" />
+              : <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+            }
+            {isBulkResearching && bulkStats && (
+              <>
+                <div className="w-32 h-1 bg-gray-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-orange-500 transition-all duration-500"
+                    style={{ width: `${Math.round(((bulkStats.done + bulkStats.failed) / bulkStats.total) * 100)}%` }}
+                  />
+                </div>
+                <span>{bulkStats.done + bulkStats.failed} / {bulkStats.total} complete</span>
+              </>
+            )}
+            {isBulkResearching && !bulkStats && <span>Starting queue...</span>}
+            {!isBulkResearching && bulkStats && (
+              <span className={bulkStats.failed > 0 ? 'text-rose-400' : 'text-emerald-400'}>
+                Research finished — {bulkStats.done} succeeded{bulkStats.failed > 0 ? `, ${bulkStats.failed} failed` : ''}
+              </span>
+            )}
+          </div>
+          {isBulkResearching && (
+            <button
+              onClick={onStopBulkResearch}
+              className="text-gray-500 hover:text-rose-400 transition-colors text-xs uppercase tracking-wider"
+            >stop</button>
+          )}
+        </div>
+      )}
+
+      {/* Grid View */}
         {viewMode === 'grid' && (
           <div className="flex-1 overflow-y-auto p-4 lg:p-8">
         <div className="space-y-16">
@@ -392,7 +437,13 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
                         {group.categories.map((c) => (
                           <tr
                             key={c.id}
-                            className={cn("group hover:bg-gray-800/30 transition-colors cursor-pointer", c.status === 'Killed' && "opacity-50")}
+                            className={cn(
+                              "group hover:bg-gray-800/30 transition-colors cursor-pointer",
+                              c.status === 'Killed' && "opacity-50",
+                              enhancingIds[c.id]?.__state === 'queued' && "bg-yellow-500/[0.04]",
+                              enhancingIds[c.id]?.__state === 'error' && "bg-rose-500/[0.04]",
+                              enhancingIds[c.id]?.__state === 'done' && "bg-emerald-500/[0.04]",
+                            )}
                             onClick={() => onEdit(c.id)}
                           >
                             <td className="py-2 px-3 sticky left-0 z-10 bg-[#111111] group-hover:bg-[#1a1a1a] transition-colors shadow-[4px_0_12px_rgba(0,0,0,0.5)] border-r border-gray-800" title={c.targetAudience}>
@@ -427,26 +478,58 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
                             </td>
                             <td className="py-2 px-2 text-right">
                               <div className="flex items-center justify-end gap-2">
-                                {enhancingIds[c.id] && (
-                                  <div className="flex flex-col items-end w-[100px] shrink-0">
-                                    <div className="flex w-full justify-between items-center mb-1">
-                                      <span className="text-[10px] text-orange-400 italic font-mono">{getProgress(c.id)}%</span>
-                                      <span className="text-[10px] text-orange-400 italic truncate ml-1 max-w-[60px]">
-                                        {enhancingIds[c.id].overall || 'Thinking...'}
-                                      </span>
+                                {(() => {
+                                  const entry = enhancingIds[c.id];
+                                  if (!entry) return null;
+                                  const state = entry.__state || 'running';
+                                  if (state === 'queued') return (
+                                    <div className="flex items-center gap-1.5 w-[80px]">
+                                      <div className="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse shrink-0" />
+                                      <span className="text-[10px] text-yellow-400 font-mono">Queued</span>
                                     </div>
-                                    <div className="w-full h-1 bg-gray-900 rounded-full overflow-hidden">
-                                      <div className="h-full bg-orange-500 transition-all duration-300" style={{ width: `${getProgress(c.id)}%` }} />
+                                  );
+                                  if (state === 'error') return (
+                                    <div className="flex items-center gap-1.5 w-[80px]" title={entry.__error}>
+                                      <AlertCircle className="w-3 h-3 text-rose-400 shrink-0" />
+                                      <span className="text-[10px] text-rose-400 truncate">Failed</span>
                                     </div>
-                                  </div>
-                                )}
+                                  );
+                                  if (state === 'done') return (
+                                    <div className="flex items-center gap-1.5 w-[80px]">
+                                      <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                                      <span className="text-[10px] text-emerald-400">Done</span>
+                                    </div>
+                                  );
+                                  // running
+                                  return (
+                                    <div className="flex flex-col items-end w-[100px] shrink-0">
+                                      <div className="flex w-full justify-between items-center mb-1">
+                                        <span className="text-[10px] text-orange-400 font-mono">{getProgress(c.id)}%</span>
+                                        <span className="text-[10px] text-orange-400 truncate ml-1 max-w-[60px]">{entry.overall || 'Thinking...'}</span>
+                                      </div>
+                                      <div className="w-full h-1 bg-gray-900 rounded-full overflow-hidden">
+                                        <div className="h-full bg-orange-500 transition-all duration-300" style={{ width: `${getProgress(c.id)}%` }} />
+                                      </div>
+                                    </div>
+                                  );
+                                })()}
                                 <button
                                   onClick={(e) => { e.stopPropagation(); onDeepSearch(c.id); }}
-                                  disabled={!!enhancingIds[c.id]}
-                                  className="inline-flex items-center px-1.5 py-1 bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 rounded transition-colors disabled:opacity-50 shrink-0"
-                                  title="Deep Search AI"
+                                  disabled={!!enhancingIds[c.id] && enhancingIds[c.id]?.__state !== 'error'}
+                                  className={cn(
+                                    "inline-flex items-center px-1.5 py-1 rounded transition-colors shrink-0",
+                                    enhancingIds[c.id]?.__state === 'error'
+                                      ? "bg-rose-500/10 text-rose-400 hover:bg-rose-500/20"
+                                      : "bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 disabled:opacity-40"
+                                  )}
+                                  title={enhancingIds[c.id]?.__state === 'error' ? 'Retry research' : 'Deep Search AI'}
                                 >
-                                  {enhancingIds[c.id] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                                  {enhancingIds[c.id]?.__state === 'running'
+                                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    : enhancingIds[c.id]?.__state === 'error'
+                                    ? <AlertCircle className="w-3.5 h-3.5" />
+                                    : <Sparkles className="w-3.5 h-3.5" />
+                                  }
                                 </button>
                               </div>
                             </td>

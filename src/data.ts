@@ -6,6 +6,8 @@ export const INITIAL_WEIGHTS = {
   acquisition: 20,
   marketSize: 15,
   loyalty: 10,
+  storyDepth: 8,
+  microNiche: 7,
 };
 
 export const INITIAL_CATEGORIES: Category[] = [

@@ -36,8 +36,16 @@ export function ComparisonView({ categories, weights, maxClv }: Props) {
   const cacs = selectedCategories.map(c => c.estimatedCAC);
   const churns = selectedCategories.map(c => c.monthlyChurnPercent);
 
-  const isBest = (val: number, arr: number[], higherIsBetter = true) => higherIsBetter ? val === Math.max(...arr) : val === Math.min(...arr);
-  const isWorst = (val: number, arr: number[], higherIsBetter = true) => higherIsBetter ? val === Math.min(...arr) : val === Math.max(...arr);
+  const isBest = (val: number, arr: number[], higherIsBetter = true) => {
+    const hi = Math.max(...arr); const lo = Math.min(...arr);
+    if (hi === lo) return false; // all identical — no meaningful winner
+    return higherIsBetter ? val === hi : val === lo;
+  };
+  const isWorst = (val: number, arr: number[], higherIsBetter = true) => {
+    const hi = Math.max(...arr); const lo = Math.min(...arr);
+    if (hi === lo) return false; // all identical — no meaningful loser
+    return higherIsBetter ? val === lo : val === hi;
+  };
 
   const getHeatmapClass = (val: number, arr: number[], higherIsBetter = true) => {
     if (isBest(val, arr, higherIsBetter)) return "bg-emerald-500/10 text-emerald-400 font-bold border-emerald-500/30";

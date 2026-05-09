@@ -522,7 +522,10 @@ export async function discoverDtcCategories(
   log(`Endless Swarm Terminated.`);
 }
 
-export async function extractCompanyFromImage(input: { imageData: string; mimeType: string; existingCategoryNames?: string[] }): Promise<{ categoryParams: Partial<Category>, rawResearch: string, sources: string[] } | null> {
+export async function extractCompanyFromImage(
+  input: { imageData: string; mimeType: string; existingCategoryNames?: string[] },
+  onProgress?: (status: string) => void
+): Promise<{ categoryParams: Partial<Category>, rawResearch: string, sources: string[] } | null> {
   if (!process.env.GEMINI_API_KEY) {
     throw new Error("Missing GEMINI_API_KEY.");
   }
@@ -530,70 +533,340 @@ export async function extractCompanyFromImage(input: { imageData: string; mimeTy
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
   const modelName = "gemini-2.5-flash";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const safeGenerate = (params: any) => retryWithBackoff(() => ai.models.generateContent(params));
-  
-  const schema = {
+  const go = (params: any) => retryWithBackoff(() => ai.models.generateContent(params));
+  const report = (msg: string) => onProgress?.(msg);
+
+  // ─── PASS 1: Brand Identification + Full Website Scan ─────────────────────
+  report('Pass 1/4 — Identifying brand & scanning full website...');
+
+  const pass1Schema = {
     type: Type.OBJECT,
     properties: {
-      foundViableCompany: { type: Type.BOOLEAN, description: "True if you successfully identified a clear business or category" },
-      companyNotes: { type: Type.STRING, description: "Markdown text holding any scraped info about this company (funding, podcasts, interviews, employees, stack, etc)" },
-      sources: { type: Type.ARRAY, items: { type: Type.STRING } },
+      companyName:     { type: Type.STRING },
+      domain:          { type: Type.STRING },
+      foundedYear:     { type: Type.STRING },
+      headquarters:    { type: Type.STRING },
+      companyType:     { type: Type.STRING, description: "e.g. DTC, SaaS, Marketplace, Agency" },
+      productCatalog:  { type: Type.STRING, description: "Markdown list of all real products/SKUs found on website with ACTUAL prices exactly as shown. Never estimate." },
+      pricingModel:    { type: Type.STRING, description: "Subscription tiers, one-time, bundles, freemium — describe exactly." },
+      activeDiscounts: { type: Type.STRING, description: "Active promo codes, welcome offers, referral discounts found via search. Include code string if found." },
+      returnPolicy:    { type: Type.STRING, description: "Summary of return/refund policy found on their site." },
+      shippingInfo:    { type: Type.STRING, description: "Shipping costs, countries served, free shipping threshold." },
       categoryData: {
         type: Type.OBJECT,
         properties: {
-          name: { type: Type.STRING, description: "Short descriptive name of the industry or category this company operates in." },
-          industry: { type: Type.STRING },
-          targetAudience: { type: Type.STRING, description: "Specific audience being targeted." },
-          estimatedCLV: { type: Type.NUMBER },
-          estimatedCAC: { type: Type.NUMBER },
-          monthlyChurnPercent: { type: Type.NUMBER },
-          marketSizeNL: { type: Type.STRING },
-          marketSizeScore: { type: Type.NUMBER },
-          realMonthlyConsumption: { type: Type.BOOLEAN },
+          name:                     { type: Type.STRING },
+          industry:                 { type: Type.STRING },
+          targetAudience:           { type: Type.STRING },
+          estimatedCLV:             { type: Type.NUMBER },
+          estimatedCAC:             { type: Type.NUMBER },
+          monthlyChurnPercent:      { type: Type.NUMBER },
+          marketSizeNL:             { type: Type.STRING },
+          marketSizeScore:          { type: Type.NUMBER },
+          realMonthlyConsumption:   { type: Type.BOOLEAN },
           monthlyConsumptionReason: { type: Type.STRING },
-          acquisitionDifficulty: { type: Type.STRING, enum: ["Easy", "Medium", "Hard"] },
-          emotionalLoyalty: { type: Type.STRING, enum: ["Low", "Medium", "High"] },
-          storyDepth: { type: Type.NUMBER },
-          microNichePotential: { type: Type.NUMBER },
-          notes: { type: Type.STRING, description: "Consolidated raw notes from research" }
+          acquisitionDifficulty:    { type: Type.STRING, enum: ["Easy", "Medium", "Hard"] },
+          emotionalLoyalty:         { type: Type.STRING, enum: ["Low", "Medium", "High"] },
+          storyDepth:               { type: Type.NUMBER },
+          microNichePotential:      { type: Type.NUMBER },
+          notes:                    { type: Type.STRING }
         },
         required: ["name"]
-      }
+      },
+      sources: { type: Type.ARRAY, items: { type: Type.STRING } }
     },
-    required: ["foundViableCompany", "categoryData", "companyNotes"]
+    required: ["companyName", "categoryData", "sources"]
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let pass1Data: Record<string, any> = {};
   try {
-    const response = await safeGenerate({
+    const res = await go({
       model: modelName,
       contents: [
-        `You are a hyper-intelligent private equity analyst. Look at the attached screenshot. Identify what company or product this is.
-        Then use google search to dig into this specific company. Find out their REAL figures (funding raised, employee count, PR stories, podcast transcripts, tech stack, origin story).
-        ANTI-HALLUCINATION RULES: (1) Only return facts you can directly attribute to a search result found in this session. (2) If a figure (funding, headcount, revenue) cannot be confirmed via search, write "Unverified" for that field — never interpolate or guess. (3) For unit economics estimates, return 0 if no comparable data is found via search. (4) Include all source URLs in the sources array.
-        Figure out their industry category. If an existing category from this list fits, use it as the name: [${input.existingCategoryNames?.join(', ')}]. Otherwise create a precise new category name.`,
+        `You are an elite e-commerce intelligence analyst. Study this screenshot and identify the exact company or brand.
+
+Then DEEPLY SEARCH their website and the web. Your job in this pass:
+1. Confirm exact company name and domain URL.
+2. Crawl their ENTIRE product catalog — list every real product/SKU with ACTUAL prices as shown on the website. Never estimate prices. If a price is behind login, write "Price not found — requires account".
+3. Find ANY active discount codes, welcome offers, promo banners, or seasonal sales (search "[brand] promo code 2025", "[brand] discount code", "[brand] coupon").
+4. Document their full pricing model (subscription tiers, one-time plans, bundles).
+5. Find their return/refund policy and shipping terms.
+6. Estimate CLV from actual prices × realistic order frequency — return 0 if no real data found. Estimate CAC return 0 if no real benchmark found via search.
+
+ANTI-HALLUCINATION: Only return prices/products you actually found on their live website or search results. Never guess prices. All sources go in the sources array.
+
+Match to an existing category if relevant: [${input.existingCategoryNames?.join(', ')}]`,
         { inlineData: { data: input.imageData, mimeType: input.mimeType } }
       ],
-      config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+      config: { responseMimeType: "application/json", responseSchema: pass1Schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
     });
-
-    const data = JSON.parse(response.text?.trim() || "{}");
-    
-    if (!data.foundViableCompany) return null;
-
-    return {
-      categoryParams: {
-        ...data.categoryData,
-        notes: `\n\n--- COMPANY SNAPSHOT ---\n${data.companyNotes || ''}\n\nExisting Notes: ${data.categoryData?.notes || ''}`
-      },
-      rawResearch: data.companyNotes,
-      sources: data.sources || []
-    };
+    pass1Data = JSON.parse(res.text?.trim() || '{}');
   } catch (e: any) {
-    throw new Error(`Failed to extract from image: ${e.message}`);
+    report(`Pass 1 error: ${e.message}`);
   }
+
+  const companyName = pass1Data.companyName || 'Unknown Company';
+  if (!pass1Data.categoryData?.name) return null;
+
+  // ─── PASS 2: Founders & Team Intelligence ─────────────────────────────────
+  report(`Pass 2/4 — Investigating founders & team of ${companyName}...`);
+
+  const pass2Schema = {
+    type: Type.OBJECT,
+    properties: {
+      founders:              { type: Type.STRING, description: "Full Markdown section. For EACH founder: full name, role, hometown/nationality, university & degree, career timeline, previous companies with exit values if known, how they started this company, LinkedIn URL (ONLY if retrieved via live search — never construct from name, write 'LinkedIn: [not retrieved via search]' if not found), Twitter/X handle, notable podcast appearances with show name and URL." },
+      linkedinEmployeeCount: { type: Type.STRING, description: "Exact range shown on LinkedIn company page (e.g. '51-200 employees'), found via search. Write 'Not found via search' if unavailable." },
+      keyHires:              { type: Type.STRING, description: "Notable C-suite/senior hires beyond founders with backgrounds. Only from search results." },
+      techStack:             { type: Type.STRING, description: "Tech stack from BuiltWith data, Wappalyzer results, or job listing requirements found via search." },
+      companyStory:          { type: Type.STRING, description: "Founding story, pivots, major milestones. Only facts traceable to a search result URL." },
+      sources: { type: Type.ARRAY, items: { type: Type.STRING } }
+    },
+    required: ["founders", "sources"]
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let pass2Data: Record<string, any> = {};
+  try {
+    const res = await go({
+      model: modelName,
+      contents: `You are an elite investigative journalist and talent scout. Research every person behind "${companyName}".
+
+MANDATORY SEARCHES — run ALL of these:
+- "${companyName} founder" — identify full name(s)
+- site:linkedin.com/in/ "[founder name]" "${companyName}" — retrieve actual LinkedIn profile URL
+- "${companyName} CEO interview" OR "${companyName} founder podcast" — podcast and media appearances
+- "${companyName}" site:crunchbase.com — verify founders listed
+- "${companyName} about us" OR "${companyName}/team" — leadership page
+- site:linkedin.com/company/ "${companyName}" — LinkedIn company employee count
+- "[founder name] before ${companyName}" OR "[founder name] previous company" — prior career
+- "[founder name] exit" OR "[founder name] acquisition" — previous exits
+- "${companyName}" site:stackshare.io OR "${companyName} tech stack" OR "${companyName} built with" — technology
+- "${companyName}" job listings — infer team size and tech from open roles
+
+ANTI-HALLUCINATION — non-negotiable:
+- LinkedIn URL: ONLY include if you actually retrieved it from a search result in this session. Never construct from a name. If not found, write "LinkedIn: [not retrieved via search]".
+- Employee count: only report the exact range LinkedIn shows. Never estimate.
+- All facts must trace to a URL. Write "Not found via search" if unavailable.`,
+      config: { responseMimeType: "application/json", responseSchema: pass2Schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+    });
+    pass2Data = JSON.parse(res.text?.trim() || '{}');
+  } catch (e: any) {
+    report(`Pass 2 error: ${e.message}`);
+  }
+
+  // ─── PASS 3: Funding & Business Traction ──────────────────────────────────
+  report(`Pass 3/4 — Tracking funding rounds & traction signals for ${companyName}...`);
+
+  const pass3Schema = {
+    type: Type.OBJECT,
+    properties: {
+      totalFundingAmount:  { type: Type.STRING, description: "Total capital raised (e.g. '$12.4M') with source URL. If bootstrapped or no data found, state explicitly." },
+      fundingRounds:       { type: Type.STRING, description: "Markdown table: | Round | Amount | Date | Lead Investor(s) | Source URL |. Only rows verified via live search." },
+      investors:           { type: Type.STRING, description: "All known investors (VCs, angels, strategics) with fund names, found via Crunchbase/news." },
+      revenue:             { type: Type.STRING, description: "Any public revenue figure or ARR range from press/interviews/filings. Include source URL. Write 'No public revenue data found via search' if none." },
+      trustpilotRating:    { type: Type.STRING, description: "Score and total review count from Trustpilot, found via search." },
+      trustpilotUrl:       { type: Type.STRING },
+      appStoreRating:      { type: Type.STRING, description: "iOS App Store or Google Play rating + review count if applicable." },
+      monthlyWebTraffic:   { type: Type.STRING, description: "Monthly traffic estimate from SimilarWeb or SEMrush found via search." },
+      customerCount:       { type: Type.STRING, description: "Any published subscriber/customer count from press or their own site." },
+      awardsAccelerators:  { type: Type.STRING, description: "Inc 5000, YC batch, Techstars, industry awards found via search." },
+      sources: { type: Type.ARRAY, items: { type: Type.STRING } }
+    },
+    required: ["sources"]
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let pass3Data: Record<string, any> = {};
+  try {
+    const res = await go({
+      model: modelName,
+      contents: `You are a private equity due diligence analyst. Investigate the funding history and business traction of "${companyName}".
+
+MANDATORY SEARCHES — run ALL of these:
+- "${companyName}" site:crunchbase.com — funding rounds, investors, founding date
+- "${companyName}" site:pitchbook.com — additional investment data
+- "${companyName} funding" OR "${companyName} raises" OR "${companyName} series" — press coverage of rounds
+- "${companyName} seed round" OR "${companyName} venture capital" — early stage funding
+- "${companyName}" site:trustpilot.com — reviews and rating
+- "${companyName}" site:apps.apple.com OR site:play.google.com — app rating if applicable
+- "${companyName} revenue" OR "${companyName} ARR" OR "${companyName} annual revenue" — business metrics in press
+- "${companyName} customers" OR "${companyName} subscribers" — any published count
+- "${companyName}" site:similarweb.com OR "${companyName} monthly visits" — web traffic
+- "${companyName} Y Combinator" OR "${companyName} accelerator" OR "${companyName} Inc 5000" — recognition
+- "${companyName}" site:sec.gov — SEC filings if publicly traded or Reg-CF/Reg-A
+
+ANTI-HALLUCINATION: Every figure must trace to a real URL from this session. If no funding found, write "No funding found via search — likely bootstrapped or undisclosed". Never invent investors, round sizes, or revenue.`,
+      config: { responseMimeType: "application/json", responseSchema: pass3Schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+    });
+    pass3Data = JSON.parse(res.text?.trim() || '{}');
+  } catch (e: any) {
+    report(`Pass 3 error: ${e.message}`);
+  }
+
+  // ─── PASS 4: PR, Social Media & Competitive Intelligence ──────────────────
+  report(`Pass 4/4 — Scanning PR, social media & ads for ${companyName}...`);
+
+  const pass4Schema = {
+    type: Type.OBJECT,
+    properties: {
+      youtubeVideos:        { type: Type.STRING, description: "Markdown list of YouTube videos about/by this brand with exact titles and URLs found via search." },
+      podcastFeatures:      { type: Type.STRING, description: "Podcast episodes featuring the brand or founders — show name, episode title, approximate date, URL." },
+      pressArticles:        { type: Type.STRING, description: "Recent press articles with headline, publication, date, URL." },
+      instagramPresence:    { type: Type.STRING, description: "Instagram handle and follower count found via search. Write 'Not found via search' if unavailable — never construct a handle." },
+      tiktokPresence:       { type: Type.STRING, description: "TikTok handle and follower count found via search. Write 'Not found via search' if unavailable." },
+      facebookAdsLibrary:   { type: Type.STRING, description: "Ad formats, copy themes, creative strategy found via Facebook Ads Library search." },
+      redditMentions:       { type: Type.STRING, description: "Reddit threads discussing this brand — subreddit, thread title, sentiment, URL." },
+      keyMarketingMessages: { type: Type.STRING, description: "Core claims and messaging found consistently across channels." },
+      controversies:        { type: Type.STRING, description: "BBB complaints, negative press, or customer issues found via search. Factual and objective only." },
+      sources: { type: Type.ARRAY, items: { type: Type.STRING } }
+    },
+    required: ["sources"]
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let pass4Data: Record<string, any> = {};
+  try {
+    const res = await go({
+      model: modelName,
+      contents: `You are a brand intelligence analyst. Map the full public presence of "${companyName}".
+
+MANDATORY SEARCHES — run ALL of these:
+- site:youtube.com "${companyName}" — YouTube videos reviewing or featuring the brand
+- "${companyName}" podcast episode OR interview — podcast appearances
+- "${companyName}" site:techcrunch.com OR site:forbes.com OR site:businessinsider.com — major press
+- "${companyName}" site:tweakers.net OR site:nrc.nl OR site:fd.nl — Dutch press if relevant
+- "${companyName}" instagram followers — Instagram account and size
+- "${companyName}" tiktok OR site:tiktok.com — TikTok presence
+- site:facebook.com/ads/library "${companyName}" OR "${companyName}" facebook ads active — ad strategy
+- site:reddit.com "${companyName}" — community discussions and sentiment
+- "${companyName}" complaint OR "${companyName}" BBB OR "${companyName}" review negative — reputation
+- "${companyName}" "promo code" OR "${companyName}" affiliate program — growth channels
+
+ANTI-HALLUCINATION: Social handles must come from real search results. Never construct @handles. All facts must have source URLs. Write "Not found via search" for anything not confirmed.`,
+      config: { responseMimeType: "application/json", responseSchema: pass4Schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+    });
+    pass4Data = JSON.parse(res.text?.trim() || '{}');
+  } catch (e: any) {
+    report(`Pass 4 error: ${e.message}`);
+  }
+
+  report(`Compiling intelligence dossier for ${companyName}...`);
+
+  const allSources = [...new Set([
+    ...(pass1Data.sources || []),
+    ...(pass2Data.sources || []),
+    ...(pass3Data.sources || []),
+    ...(pass4Data.sources || []),
+  ])];
+
+  const companyNotes = `# Company Intelligence Dossier: ${companyName}
+> Generated: ${new Date().toISOString()} | ${allSources.length} sources verified via live search
+
+---
+
+## Company Overview
+- **Name:** ${pass1Data.companyName || 'Unknown'}
+- **Domain:** ${pass1Data.domain || 'Not found'}
+- **Founded:** ${pass1Data.foundedYear || 'Not found'}
+- **HQ:** ${pass1Data.headquarters || 'Not found'}
+- **Type:** ${pass1Data.companyType || 'Not found'}
+
+${pass2Data.companyStory ? `**Origin Story:**\n${pass2Data.companyStory}` : ''}
+
+---
+
+## Products & Pricing
+${pass1Data.productCatalog || '_No product data extracted._'}
+
+**Pricing Model:** ${pass1Data.pricingModel || 'Not found'}
+
+**Active Discounts / Promo Codes:** ${pass1Data.activeDiscounts || 'None found via search'}
+
+**Return Policy:** ${pass1Data.returnPolicy || 'Not found'}
+
+**Shipping:** ${pass1Data.shippingInfo || 'Not found'}
+
+---
+
+## Founders & Team
+${pass2Data.founders || '_No founder data found via search._'}
+
+**LinkedIn Employee Count:** ${pass2Data.linkedinEmployeeCount || 'Not found via search'}
+
+**Key Hires:** ${pass2Data.keyHires || 'Not found'}
+
+**Tech Stack:** ${pass2Data.techStack || 'Not found'}
+
+---
+
+## Funding & Investors
+**Total Funding:** ${pass3Data.totalFundingAmount || 'No funding found via search — likely bootstrapped or undisclosed'}
+
+${pass3Data.fundingRounds ? `**Funding Rounds:**\n${pass3Data.fundingRounds}` : ''}
+
+**Investors:** ${pass3Data.investors || 'Not found'}
+
+---
+
+## Business Traction
+**Revenue:** ${pass3Data.revenue || 'No public revenue data found via search'}
+
+**Trustpilot:** ${pass3Data.trustpilotRating || 'Not found'}${pass3Data.trustpilotUrl ? ` — [View](${pass3Data.trustpilotUrl})` : ''}
+
+**App Store:** ${pass3Data.appStoreRating || 'N/A or not found'}
+
+**Monthly Web Traffic:** ${pass3Data.monthlyWebTraffic || 'Not found'}
+
+**Customer / Subscriber Count:** ${pass3Data.customerCount || 'Not publicly disclosed'}
+
+**Awards & Accelerators:** ${pass3Data.awardsAccelerators || 'None found'}
+
+---
+
+## PR, Social & Media
+**YouTube:** ${pass4Data.youtubeVideos || 'Not found'}
+
+**Podcasts:** ${pass4Data.podcastFeatures || 'Not found'}
+
+**Press:** ${pass4Data.pressArticles || 'Not found'}
+
+**Instagram:** ${pass4Data.instagramPresence || 'Not found via search'}
+
+**TikTok:** ${pass4Data.tiktokPresence || 'Not found via search'}
+
+**Facebook Ads Library:** ${pass4Data.facebookAdsLibrary || 'Not found'}
+
+**Reddit:** ${pass4Data.redditMentions || 'Not found'}
+
+**Core Marketing Messages:** ${pass4Data.keyMarketingMessages || 'Not found'}
+
+${pass4Data.controversies ? `**Complaints / Controversies:**\n${pass4Data.controversies}` : ''}
+
+---
+
+## Sources (${allSources.length} URLs from live search)
+${allSources.map((s, i) => `${i + 1}. ${s}`).join('\n') || '_No sources captured._'}
+`;
+
+  return {
+    categoryParams: {
+      ...pass1Data.categoryData,
+      notes: companyNotes,
+      researchSources: allSources,
+    },
+    rawResearch: companyNotes,
+    sources: allSources,
+  };
 }
 
-export async function extractCategoriesFromText(input: { text?: string; fileData?: { mimeType: string; data: string }; existingCategoryNames?: string[] }): Promise<Partial<Category>[]> {
+export interface ExtractionRange {
+  currentPage: number;  // 1-based first page to scan
+  endPage: number;      // 1-based last page to scan (inclusive)
+  totalPages: number;   // estimated total pages in document
+}
+
+export async function extractCategoriesFromText(input: { text?: string; fileData?: { mimeType: string; data: string }; existingCategoryNames?: string[]; range?: ExtractionRange }): Promise<Partial<Category>[]> {
   if (!process.env.GEMINI_API_KEY) {
     throw new Error("Missing GEMINI_API_KEY environment variable. Please configure it in the platform.");
   }
@@ -636,7 +909,11 @@ export async function extractCategoriesFromText(input: { text?: string; fileData
     ? `\n\nCRITICAL INSTRUCTION: You must skip and DO NOT EXTRACT the following categories because we already have them: ${input.existingCategoryNames.join(", ")}.\n\n`
     : "";
 
-  const promptText = `Extract potential e-commerce or niche business categories from the following document or text. Format them neatly and guess initial metrics (e.g. CLV, CAC, etc) for the Netherlands market if not explicitly stated. If the document contains any existing research, competitors, specific metrics, or detailed notes about a category, extract all of that info and include it in the 'notes' field in a structured way.${existingInfo}${input.text ? `\n\nText:\n\n${input.text.substring(0, 200000)}` : ''}`;
+  const rangeInstruction = input.range
+    ? `\n\nDOCUMENT SCANNING INSTRUCTION: This document has approximately ${input.range.totalPages} pages total.\nYOUR SCAN RANGE FOR THIS BATCH: Pages ${input.range.currentPage} to ${input.range.endPage} ONLY.\n- Navigate directly to page ${input.range.currentPage} and start reading from there.\n- Stop reading at page ${input.range.endPage}; do not extract content from any page beyond ${input.range.endPage}.\n- If you see content from earlier batches (pages before ${input.range.currentPage}), skip it.\nThis sequenced approach guarantees the full document is covered without overlap or gaps.`
+    : '';
+
+  const promptText = `Extract potential e-commerce or niche business categories from the following document or text. Format them neatly and estimate initial metrics (CLV, CAC, etc) for the Netherlands market if not explicitly stated. If the document contains existing research, competitors, specific metrics, or detailed notes about a category, extract all of that and include it in the 'notes' field.${existingInfo}${rangeInstruction}${input.text ? `\n\nText:\n\n${input.text.substring(0, 200000)}` : ''}`;
 
   const contents: any[] = [promptText];
   if (input.fileData) {
