@@ -83,7 +83,10 @@ export default defineConfig(({mode}) => {
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
-    },
+      hmr: process.env.DISABLE_HMR !== 'true',      watch: {
+        // Ignore categories.json so Vite doesn't reload the page when the
+        // persistence layer writes category updates during AI research.
+        ignored: ['**/categories.json', '**/categories.json.tmp'],
+      },    },
   };
 });

@@ -104,25 +104,39 @@ export async function agenticDeepResearchCategory(
     onProgress({ ...currentProgress });
   };
 
+  // ─── Two-pass helpers ───────────────────────────────────────────────────────
+  // Gemini does not allow responseMimeType:"application/json" + googleSearch together.
+  // Pass 1 uses googleSearch (plain text output).
+  // Pass 2 extracts structured data from that text (JSON schema, no search tools).
+
+  const searchRaw = async (prompt: string): Promise<string> => {
+    const resp = await safeGenerate({
+      model: modelName,
+      contents: prompt,
+      config: { tools: [{ googleSearch: {} }] },
+    });
+    return resp.text?.trim() || '';
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const extractJson = async <T>(rawText: string, schema: any, hint: string): Promise<T> => {
+    const resp = await safeGenerate({
+      model: modelName,
+      contents: `${hint}\n\n---RESEARCH TEXT START---\n${rawText.slice(0, 30000)}\n---RESEARCH TEXT END---`,
+      config: { responseMimeType: 'application/json', responseSchema: schema },
+    });
+    return JSON.parse(resp.text?.trim() || '{}') as T;
+  };
+  // ───────────────────────────────────────────────────────────────────────────
+
   updateProgress({ overall: `Launching 7 autonomous agents for ${category.name}...` });
 
   const runUnitEconomicsAgent = async (): Promise<{ result: Partial<Category>, raw: string, sources: string[] }> => {
     updateAgent('unitEconomics', 'running', 'Searching pricing, LTV, CAC models on Reddit & scientific sources...');
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        markdownReport: { type: Type.STRING, description: "Detailed Markdown report showing unit economics, CAC/CLV, pricing models, backed by sources." },
-        estimatedCLV: { type: Type.NUMBER, description: "Estimated Average CLV in Euros" },
-        estimatedCAC: { type: Type.NUMBER, description: "Estimated Average CAC in Euros" },
-        sources: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of URLs or report names used for this research" }
-      },
-      required: ["markdownReport", "estimatedCLV", "estimatedCAC", "sources"]
-    };
     try {
-      const response = await safeGenerate({
-        model: modelName,
-        contents: `You are an expert e-commerce unit economics analyst. Deeply research the Customer Lifetime Value (CLV, in Euros) and Customer Acquisition Cost (CAC, in Euros) for the category: "${category.name}" targeting "${category.targetAudience}". Focus entirely on realistic European/NL metrics.
-        ANTI-HALLUCINATION RULES: (1) Every CLV and CAC figure you return MUST be backed by a real URL found via search in this session. (2) If no real data can be found for this specific category, return 0 for that numeric field and explain why in markdownReport. A sourced zero is always more trustworthy than an invented figure. (3) Do not extrapolate from unrelated industries. (4) Populate the sources array with every URL you used — this is mandatory.
+      // Pass 1: grounded search → plain text
+      const raw = await searchRaw(`You are an expert e-commerce unit economics analyst. Deeply research the Customer Lifetime Value (CLV, in Euros) and Customer Acquisition Cost (CAC, in Euros) for the category: "${category.name}" targeting "${category.targetAudience}". Focus entirely on realistic European/NL metrics.
+        ANTI-HALLUCINATION: Every CLV/CAC figure MUST be backed by a real URL found via search. Return 0 for any metric you cannot source. Cite every URL used.
 
         MANDATORY SEARCHES — run ALL of these:
         - "${category.name}" CLV "customer lifetime value" subscription e-commerce
@@ -136,12 +150,15 @@ export async function agenticDeepResearchCategory(
         - "${category.name}" subscription ARPU "average revenue per user"
         - "${category.name}" unit economics startup pitch deck investor
 
-        Keep CLV and CAC completely separate in your logic. Return a comprehensive breakdown with inline source citations.`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
-      });
+        Keep CLV and CAC completely separate. Return a comprehensive breakdown with inline source citations.`);
+      // Pass 2: extract numeric fields from the research text
+      const extracted = await extractJson<{ estimatedCLV: number; estimatedCAC: number }>(
+        raw,
+        { type: Type.OBJECT, properties: { estimatedCLV: { type: Type.NUMBER }, estimatedCAC: { type: Type.NUMBER } }, required: ['estimatedCLV', 'estimatedCAC'] },
+        `From the research report below extract the estimated Customer Lifetime Value (CLV in Euros) and Customer Acquisition Cost (CAC in Euros). Return 0 for any value not clearly stated.`
+      );
       updateAgent('unitEconomics', 'completed', 'Unit economics finalized.');
-      const data = JSON.parse(response.text?.trim() || "{}");
-      return { result: { estimatedCLV: data.estimatedCLV, estimatedCAC: data.estimatedCAC }, raw: data.markdownReport || '', sources: data.sources || [] };
+      return { result: { estimatedCLV: extracted.estimatedCLV, estimatedCAC: extracted.estimatedCAC }, raw, sources: [] };
     } catch (e: any) {
       updateAgent('unitEconomics', 'error', e.message);
       return { result: {}, raw: `Error: ${e.message}`, sources: [] };
@@ -150,79 +167,57 @@ export async function agenticDeepResearchCategory(
 
   const runMarketDynamicsAgent = async (): Promise<{ result: Partial<Category>, raw: string, sources: string[] }> => {
     updateAgent('marketDynamics', 'running', 'Analyzing global & NL market sizes, churn, and CAGR...');
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        markdownReport: { type: Type.STRING, description: "Detailed Markdown report showing market size, CAGR, trends, and the full TAM→SAM→SOM funnel with every filter step numbered and sourced." },
-        monthlyChurnPercent: { type: Type.NUMBER, description: "Estimated monthly churn percentage (0-100)" },
-        cagr: { type: Type.STRING, description: "Estimated CAGR percentage over next 5 years" },
-        marketSizeGlobal: { type: Type.STRING, description: "Total Global Market Size in euros/dollars with year" },
-        marketSizeEU: { type: Type.STRING, description: "Total European Market Size in euros with year" },
-        marketSizeNL: { type: Type.STRING, description: "Total NL Market Size / Value in euros with year" },
-        audienceSizeNL: { type: Type.STRING, description: "Human-readable SOM figure: '~12,400 reachable targets'" },
-        tamNL: { type: Type.NUMBER, description: "TAM: raw count of all entities in NL that could ever be a customer (integer). E.g. 100000 for all NL restaurants." },
-        samNL: { type: Type.NUMBER, description: "SAM: count after removing unreachable entities (no social presence, wrong region, offline-only, etc.). Must be <= TAM." },
-        somNL: { type: Type.NUMBER, description: "SOM: count that realistically can buy given budget, awareness, and operational capacity. Must be <= SAM. This is the number we actually target." },
-        funnelBreakdownNL: { type: Type.STRING, description: "Numbered step-by-step funnel. Each step: entity count → filter applied → remaining count → source URL. Example: '1. 100,000 restaurants in NL (CBS 2024) → 2. 52,000 with active social media (Newcom 2023, 52%) → 3. 18,000 with ≥€300/mo marketing budget (KVK SME survey 2023, 35%) → 4. 12,400 aware of/open to this product category (Eurobarometer 2024, 69%) = SOM 12,400'" },
-        marketSizeScore: { type: Type.NUMBER, description: "Score from 1 to 10 based on SOM size, growth rate, and competition density" },
-        realMonthlyConsumption: { type: Type.BOOLEAN },
-        monthlyConsumptionReason: { type: Type.STRING },
-        acquisitionDifficulty: { type: Type.STRING, description: "Easy, Medium, or Hard" },
-        emotionalLoyalty: { type: Type.STRING, description: "Low, Medium, or High" },
-        storyDepth: { type: Type.NUMBER, description: "Score from 1 to 10" },
-        microNichePotential: { type: Type.NUMBER, description: "Score from 1 to 10" },
-        sources: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of URLs or report names used for this research" }
-      },
-      required: ["markdownReport", "monthlyChurnPercent", "marketSizeGlobal", "marketSizeEU", "marketSizeNL", "audienceSizeNL", "tamNL", "samNL", "somNL", "funnelBreakdownNL", "marketSizeScore", "realMonthlyConsumption", "monthlyConsumptionReason", "acquisitionDifficulty", "emotionalLoyalty", "storyDepth", "microNichePotential", "sources"]
-    };
     try {
-      const response = await safeGenerate({
-        model: modelName,
-        contents: `You are a European Consumer Market Researcher specialising in bottom-up market sizing for the Netherlands.
+      // Pass 1: grounded search → plain text
+      const raw = await searchRaw(`You are a European Consumer Market Researcher specialising in bottom-up market sizing for the Netherlands.
+CATEGORY: "${category.name}" | TARGET: "${category.targetAudience}"
 
-CATEGORY: "${category.name}"
-TARGET: "${category.targetAudience}"
+Research market size (global/EU/NL), CAGR, monthly churn %, and compute a realistic TAM→SAM→SOM funnel for NL.
 
-═══════════════════════════════════════════════════════════
-MISSION — TAM → SAM → SOM FUNNEL (mandatory, numbered steps)
-═══════════════════════════════════════════════════════════
-You MUST compute a realistic, bottom-up funnel for the NL market.
+FUNNEL RULES: Start from largest countable NL population. Apply filters one at a time — each step must show the filter, % reduction, source URL, and remaining count. TAM = outer boundary, SAM = reachable, SOM = realistic buyers.
 
-RULES:
-1. Start from the LARGEST countable population relevant to this category (CBS StatLine, KVK register, RVO, Newcom, etc.). Never start from "NL population 18M" unless the product genuinely targets all Dutch adults.
-2. Apply filters ONE AT A TIME. Each step must show:
-   • What you filtered on (e.g. "on social media", "SME with >€300/mo marketing budget")
-   • The % or absolute reduction
-   • A real source URL for the filter rate
-   • Remaining count
-3. TAM = after first meaningful outer boundary (entity type + country)
-4. SAM = after removing unreachable entities (offline, wrong region, competitor-locked, etc.)
-5. SOM = after removing those without budget, need, or operational readiness to buy YOUR product
-6. If a real source cannot be found for a filter rate, STATE that and use a conservative estimate marked "[estimated — no source found]"
-7. Integers only for tamNL, samNL, somNL. audienceSizeNL = human label e.g. "~12,400 reachable B2B targets"
+MANDATORY SEARCHES:
+- "${category.name}" market size global EU Netherlands 2024 2025
+- "${category.name}" "CAGR" OR "compound annual growth" subscription 2025 2026
+- "${category.name}" subscription monthly churn benchmark
+- "${category.name}" CBS.nl OR KVK Netherlands market data
+- "${category.name}" TAM SAM SOM Netherlands consumer market
+- "${category.name}" emotional loyalty brand retention study
+- "${category.name}" micro-niche DTC opportunity 2025 2026
 
-EXAMPLE FORMAT for funnelBreakdownNL:
-"1. 100,000 full-service restaurants in NL (KVK Handelsregister 2024) [TAM = 100,000]
- → 2. −48,000 with no digital/online presence (Newcom Nationale Social Media Onderzoek 2024: 52% active) [remaining 52,000]
- → 3. −34,000 with marketing budget <€200/mo (KVK MKB Barometer Q1 2024: 35% have ≥€200/mo) [remaining 18,200]
- → 4. −5,800 already using a direct competitor (estimated 32%, no source found) [remaining 12,400]
- [SOM = 12,400]"
+ANTI-HALLUCINATION: Every figure must cite a real URL. Write "Unknown (no source found)" for unverifiable data.
+Return comprehensive markdown covering market size, churn, CAGR, consumer psychology, and the full funnel.`);
 
-═══════════════════════════════════════════════════════════
-ANTI-HALLUCINATION RULES
-═══════════════════════════════════════════════════════════
-• Every figure MUST cite a real source URL found via live Google Search.
-• If a figure cannot be sourced, return "Unknown (no source found)" — NEVER fabricate.
-• Populate the sources array with every URL used — mandatory.
-• marketSizeNL, EU, Global: cite year; prefer official statistics or reputable industry reports.
-
-Return a detailed markdownReport covering: market size (global/EU/NL), CAGR, consumer psychology (loyalty, story depth), niche potential, and the full funnel. Include sources list.`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
-      });
+      // Pass 2: extract structured fields
+      const extractSchema = {
+        type: Type.OBJECT,
+        properties: {
+          monthlyChurnPercent: { type: Type.NUMBER },
+          cagr: { type: Type.STRING },
+          marketSizeGlobal: { type: Type.STRING },
+          marketSizeEU: { type: Type.STRING },
+          marketSizeNL: { type: Type.STRING },
+          audienceSizeNL: { type: Type.STRING },
+          tamNL: { type: Type.NUMBER },
+          samNL: { type: Type.NUMBER },
+          somNL: { type: Type.NUMBER },
+          funnelBreakdownNL: { type: Type.STRING },
+          marketSizeScore: { type: Type.NUMBER },
+          realMonthlyConsumption: { type: Type.BOOLEAN },
+          monthlyConsumptionReason: { type: Type.STRING },
+          acquisitionDifficulty: { type: Type.STRING },
+          emotionalLoyalty: { type: Type.STRING },
+          storyDepth: { type: Type.NUMBER },
+          microNichePotential: { type: Type.NUMBER },
+        },
+        required: ["monthlyChurnPercent", "marketSizeNL", "tamNL", "samNL", "somNL", "marketSizeScore", "realMonthlyConsumption", "acquisitionDifficulty", "emotionalLoyalty", "storyDepth", "microNichePotential"]
+      };
+      const extracted = await extractJson<Record<string, any>>(
+        raw, extractSchema,
+        `From the market research report below, extract all structured market data fields. Use 0 for missing numbers, "Unknown" for missing strings, and false for missing booleans.`
+      );
       updateAgent('marketDynamics', 'completed', 'Market dynamics mapped.');
-      const data = JSON.parse(response.text?.trim() || "{}");
-      const { markdownReport, sources, ...categoryFields } = data;
-      return { result: categoryFields, raw: markdownReport || '', sources: sources || [] };
+      return { result: extracted, raw, sources: [] };
     } catch (e: any) {
       updateAgent('marketDynamics', 'error', e.message);
       return { result: {}, raw: `Error: ${e.message}`, sources: [] };
@@ -231,18 +226,8 @@ Return a detailed markdownReport covering: market size (global/EU/NL), CAGR, con
 
   const runLocalCompetitorsAgent = async (): Promise<{ raw: string, sources: string[] }> => {
     updateAgent('localCompetitors', 'running', 'Spying on local NL/EU players...');
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        markdown: { type: Type.STRING, description: "Markdown text containing the list of 2-4 competitors" },
-        sources: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of URLs or report names used for this research" }
-      },
-      required: ["markdown", "sources"]
-    };
     try {
-      const response = await safeGenerate({
-        model: modelName,
-        contents: `You are a competitive intelligence operative. Search for and list local competitors in the Netherlands (or broader EU) selling: "${category.name}" to "${category.targetAudience}".
+      const raw = await searchRaw(`You are a competitive intelligence operative. Search for and list local competitors in the Netherlands (or broader EU) selling: "${category.name}" to "${category.targetAudience}".
 
         MANDATORY SEARCHES — run ALL of these:
         - "${category.name}" subscription Netherlands OR "Nederland" webshop
@@ -256,12 +241,9 @@ Return a detailed markdownReport covering: market size (global/EU/NL), CAGR, con
         - intitle:review "${category.name}" Netherlands OR Belgian competitor
         - "${category.name}" site:similarweb.com monthly visits NL competitor
 
-        For each of 2-4 real competitors: company name, URL, monthly traffic estimate (SimilarWeb), pricing, Trustpilot score, positioning angle, and key gap/weakness to exploit. Return Markdown text and all sources.`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
-      });
+        For each of 2-4 real competitors: company name, URL, monthly traffic estimate (SimilarWeb), pricing, Trustpilot score, positioning angle, and key gap/weakness to exploit.`);
       updateAgent('localCompetitors', 'completed', 'Local competition analyzed.');
-      const data = JSON.parse(response.text?.trim() || "{}");
-      return { raw: data.markdown || '', sources: data.sources || [] };
+      return { raw, sources: [] };
     } catch (e: any) {
       updateAgent('localCompetitors', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
@@ -270,18 +252,8 @@ Return a detailed markdownReport covering: market size (global/EU/NL), CAGR, con
 
   const runGlobalCompetitorsAgent = async (): Promise<{ raw: string, sources: string[] }> => {
     updateAgent('globalCompetitors', 'running', 'Scanning US/Global pioneers...');
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        markdown: { type: Type.STRING, description: "Markdown text containing the list of successful global competitors" },
-        sources: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of URLs or report names used for this research" }
-      },
-      required: ["markdown", "sources"]
-    };
     try {
-      const response = await safeGenerate({
-        model: modelName,
-        contents: `You are a 2026 DTC trend analyst and global competitive intelligence specialist. Research the most successful global players for: "${category.name}" targeting "${category.targetAudience}".
+      const raw = await searchRaw(`You are a 2026 DTC trend analyst and global competitive intelligence specialist. Research the most successful global players for: "${category.name}" targeting "${category.targetAudience}".
 
         MANDATORY SEARCHES — run ALL of these:
         - "${category.name}" DTC direct-to-consumer subscription US UK global top brand 2025 2026
@@ -295,12 +267,9 @@ Return a detailed markdownReport covering: market size (global/EU/NL), CAGR, con
         - "${category.name}" Inc5000 OR Deloitte Fast500 fastest growing DTC
         - "${category.name}" podcast interview founder scaling unit economics
 
-        Identify what makes the top 1-2 global players successful: exact growth channels, retention mechanics, product diff, unit economics. Extract from X, LinkedIn, Reddit, podcasts where found. Return Markdown text and all sources.`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
-      });
+        Identify what makes the top 1-2 global players successful: exact growth channels, retention mechanics, product diff, unit economics.`);
       updateAgent('globalCompetitors', 'completed', 'Global benchmarks identified.');
-      const data = JSON.parse(response.text?.trim() || "{}");
-      return { raw: data.markdown || '', sources: data.sources || [] };
+      return { raw, sources: [] };
     } catch (e: any) {
       updateAgent('globalCompetitors', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
@@ -309,27 +278,18 @@ Return a detailed markdownReport covering: market size (global/EU/NL), CAGR, con
 
   const runLegalLogisticsAgent = async (): Promise<{ result: Partial<Category>, raw: string, sources: string[] }> => {
     updateAgent('legalLogistics', 'running', 'Checking NL legal & ad restrictions...');
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        markdownReport: { type: Type.STRING, description: "Detailed Markdown report outlining exact legalities, ad blocks, required licenses in the EU/NL." },
-        regulatoryRiskNL: { type: Type.STRING, description: "Low, Medium, or High" },
-        legalAndAdRestrictions: { type: Type.STRING, description: "Details on if it's legal in the Netherlands, easy to do, requires special licenses, or has restricted ad categories." },
-        sources: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of URLs or report names used for this research" }
-      },
-      required: ["markdownReport", "regulatoryRiskNL", "legalAndAdRestrictions", "sources"]
-    };
     try {
-      const response = await safeGenerate({
-        model: modelName,
-        contents: `You are a Dutch Legal and E-commerce Compliance Expert. Analyze the category: "${category.name}" for the Netherlands market. Is it legal? Does it require special licenses? Is it a restricted ad category on Meta/Google?
-        ANTI-HALLUCINATION RULES: (1) Only cite legal requirements you find via search on official sources (overheid.nl, autoriteitpersoonsgegevens.nl, reclame.code.nl, or credible legal blogs). (2) Do not assume regulatory status from memory — always verify via search. (3) If a legal point cannot be verified via search, say "Unverified — consult a Dutch e-commerce lawyer" instead of guessing. (4) Sources array is mandatory — include every URL used.`,
-
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
-      });
+      // Pass 1: grounded search
+      const raw = await searchRaw(`You are a Dutch Legal and E-commerce Compliance Expert. Analyze the category: "${category.name}" for the Netherlands market. Is it legal? Does it require special licenses? Is it a restricted ad category on Meta/Google?
+        ANTI-HALLUCINATION: Only cite legal requirements found via search on official sources (overheid.nl, autoriteitpersoonsgegevens.nl, reclame.code.nl). Write "Unverified — consult a Dutch e-commerce lawyer" for anything not verified.`);
+      // Pass 2: extract structured fields
+      const extracted = await extractJson<{ regulatoryRiskNL: string; legalAndAdRestrictions: string }>(
+        raw,
+        { type: Type.OBJECT, properties: { regulatoryRiskNL: { type: Type.STRING, enum: ['Low', 'Medium', 'High'] }, legalAndAdRestrictions: { type: Type.STRING } }, required: ['regulatoryRiskNL', 'legalAndAdRestrictions'] },
+        `From the legal research report below, extract: regulatoryRiskNL (must be exactly Low/Medium/High) and legalAndAdRestrictions (a summary of legal and ad restrictions in the Netherlands).`
+      );
       updateAgent('legalLogistics', 'completed', 'Legal and compliance checked.');
-      const data = JSON.parse(response.text?.trim() || "{}");
-      return { result: { regulatoryRiskNL: data.regulatoryRiskNL as any, legalAndAdRestrictions: data.legalAndAdRestrictions }, raw: data.markdownReport || '', sources: data.sources || [] };
+      return { result: { regulatoryRiskNL: extracted.regulatoryRiskNL as any, legalAndAdRestrictions: extracted.legalAndAdRestrictions }, raw, sources: [] };
     } catch (e: any) {
       updateAgent('legalLogistics', 'error', e.message);
       return { result: {}, raw: `Error: ${e.message}`, sources: [] };
@@ -338,18 +298,8 @@ Return a detailed markdownReport covering: market size (global/EU/NL), CAGR, con
 
   const runSuppliersBudgetAgent = async (): Promise<{ raw: string, sources: string[] }> => {
     updateAgent('suppliersBudget', 'running', 'Checking suppliers and startup budget...');
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        markdown: { type: Type.STRING, description: "Markdown text detailing suppliers, dropshipping options, and how realistic it is to start on a tight budget." },
-        sources: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of URLs or report names used for this research" }
-      },
-      required: ["markdown", "sources"]
-    };
     try {
-      const response = await safeGenerate({
-        model: modelName,
-        contents: `You are a scrappy e-commerce founder and supply chain expert. For the category: "${category.name}", map every realistic supply chain option and startup cost for an NL-based DTC subscription launch.
+      const raw = await searchRaw(`You are a scrappy e-commerce founder and supply chain expert. For the category: "${category.name}", map every realistic supply chain option and startup cost for an NL-based DTC subscription launch.
 
         MANDATORY SEARCHES — run ALL of these:
         - site:alibaba.com "${category.name}" minimum order quantity white label
@@ -364,12 +314,9 @@ Return a detailed markdownReport covering: market size (global/EU/NL), CAGR, con
         - "${category.name}" COGs "cost of goods" subscription box benchmark
         - "${category.name}" MOQ minimum order e-commerce startup
 
-        Provide: real supplier names, MOQ, unit cost, estimated COGs%, and a full MVP budget breakdown from €0 to 100 subscribers in NL. Flag supply chain risks. Return Markdown text and all sources.`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
-      });
+        Provide: real supplier names, MOQ, unit cost, estimated COGs%, and a full MVP budget breakdown from €0 to 100 subscribers in NL.`);
       updateAgent('suppliersBudget', 'completed', 'Suppliers and budget analyzed.');
-      const data = JSON.parse(response.text?.trim() || "{}");
-      return { raw: data.markdown || '', sources: data.sources || [] };
+      return { raw, sources: [] };
     } catch (e: any) {
       updateAgent('suppliersBudget', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
@@ -378,18 +325,8 @@ Return a detailed markdownReport covering: market size (global/EU/NL), CAGR, con
 
   const runAdIntelligenceAgent = async (): Promise<{ raw: string, sources: string[] }> => {
     updateAgent('adIntelligence', 'running', 'Scanning Meta/TikTok ad library, CPM benchmarks, creative hooks...');
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        markdown: { type: Type.STRING, description: "Full Markdown paid-media intelligence report structured by channel." },
-        sources: { type: Type.ARRAY, items: { type: Type.STRING } }
-      },
-      required: ["markdown", "sources"]
-    };
     try {
-      const response = await safeGenerate({
-        model: modelName,
-        contents: `You are a 2026 DTC performance marketing specialist. Research the full paid media landscape for: "${category.name}" targeting "${category.targetAudience}" in the Netherlands.
+      const raw = await searchRaw(`You are a 2026 DTC performance marketing specialist. Research the full paid media landscape for: "${category.name}" targeting "${category.targetAudience}" in the Netherlands.
 
 MANDATORY SEARCHES — run ALL of these:
 - site:facebook.com/ads/library "${category.name}" — active Meta ads targeting NL/EU
@@ -406,56 +343,9 @@ MANDATORY SEARCHES — run ALL of these:
 - "${category.name}" Nederlandse influencer samenwerking OR NL creator partnership
 - "${category.name}" ad fatigue creative refresh cycle subscription
 
-REPORT FORMAT (use exactly this structure):
-
-## Channel CAC Breakdown
-| Channel | Estimated CAC (NL) | Confidence | Source |
-|---------|-------------------|------------|--------|
-| Meta (FB/IG) | | | |
-| TikTok | | | |
-| Google Search | | | |
-| Google Shopping | | | |
-| Influencer/UGC | | | |
-| Affiliate | | | |
-
-## Meta (Facebook/Instagram)
-- CPM range NL (€): …
-- Typical CTR: …
-- Best-performing creative angles: …
-- Ad restrictions for this category (health claims, etc.): …
-- Winning ad formats in 2026 (UGC, VSL, static, carousel): …
-
-## TikTok
-- TikTok Shop presence for this category (yes/no/emerging): …
-- Top creative hooks/styles that convert: …
-- CPM range NL (€): …
-- UGC vs produced content split: …
-- Key creators or niches to target: …
-
-## Google (Search + Shopping + PMAX)
-- CPC ranges NL (€): …
-- ROAS benchmarks: …
-- Best keyword intent clusters: …
-- PMAX vs Search split recommendation: …
-
-## Influencer & UGC Economy
-- Nano/micro/macro split recommendation: …
-- Typical CPR (cost per result) via influencer: …
-- Platforms that convert best for this category: …
-- Average engagement rate benchmarks: …
-
-## 2026-Specific Opportunities
-New platform features (Meta AI ads, TikTok Shop Live, YouTube Shopping, Pinterest Shopping, WhatsApp Business NL) and creative formats emerging for this category.
-
-## Creative Strategy Playbook
-Top 3-5 proven hooks/angles with evidence from search. What emotional triggers drive conversions in this category?
-
-ANTI-HALLUCINATION: All CPM/CPC/ROAS/CAC figures must trace to a real source URL from this session. If a benchmark cannot be verified, write "No verified benchmark found — industry proxy: [X], treat as estimate". Never invent figures.`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
-      });
+Return a comprehensive paid-media intelligence report covering: channel CAC breakdown table, Meta/TikTok/Google tactics, influencer/UGC strategy, 2026-specific opportunities, and creative hooks. ANTI-HALLUCINATION: All CPM/CPC/ROAS/CAC figures must trace to a real source URL from this session.`);
       updateAgent('adIntelligence', 'completed', 'Ad intelligence mapped.');
-      const data = JSON.parse(response.text?.trim() || "{}");
-      return { raw: data.markdown || '', sources: data.sources || [] };
+      return { raw, sources: [] };
     } catch (e: any) {
       updateAgent('adIntelligence', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
@@ -464,18 +354,8 @@ ANTI-HALLUCINATION: All CPM/CPC/ROAS/CAC figures must trace to a real source URL
 
   const runRetentionEngineeringAgent = async (): Promise<{ raw: string, sources: string[] }> => {
     updateAgent('retentionEngineering', 'running', 'Mapping cohort retention, churn drivers, subscription term economics...');
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        markdown: { type: Type.STRING, description: "Full Markdown retention engineering report with benchmarks, playbooks, and 2026 tactics." },
-        sources: { type: Type.ARRAY, items: { type: Type.STRING } }
-      },
-      required: ["markdown", "sources"]
-    };
     try {
-      const response = await safeGenerate({
-        model: modelName,
-        contents: `You are a subscription retention engineer and DTC growth expert. Research cohort economics and retention for: "${category.name}" targeting "${category.targetAudience}".
+      const raw = await searchRaw(`You are a subscription retention engineer and DTC growth expert. Research cohort economics and retention for: "${category.name}" targeting "${category.targetAudience}".
 
 MANDATORY SEARCHES — run ALL of these:
 - "${category.name}" subscription retention benchmark 2025 2026
@@ -490,67 +370,11 @@ MANDATORY SEARCHES — run ALL of these:
 - "${category.name}" dunning management failed payment recovery rate
 - "${category.name}" referral program LTV uplift loyalty program
 - site:reddit.com/r/ecommerce "${category.name}" retention churn
-- "${category.name}" subscription box cohort analysis
-- subscription business benchmark 2025 involuntary churn failed payment
 - "${category.name}" cancellation survey top reasons
 
-REPORT FORMAT (exact structure):
-
-## Retention Benchmark Summary
-| Metric | This Category (found/estimated) | Source | Confidence |
-|--------|---------------------------------|--------|-----------|
-| Month-1 retention | | | |
-| Month-3 retention | | | |
-| Month-6 retention | | | |
-| Month-12 retention | | | |
-| Steady-state monthly churn | | | |
-| Target <6% churn feasible? | | | |
-
-## Subscription Term Mix Engineering
-- % of subscribers on annual plans (benchmark + source)
-- Optimal annual discount for this category (% off that maximizes net revenue while boosting LTV)
-- Free trial vs paid trial: which converts better and why
-- Prepaid bundles (3/6/12 month) — measured LTV uplift vs monthly
-
-## Top 5 Churn Drivers (ranked by frequency)
-From customer surveys, Reddit, review analysis, or cancellation studies found via search.
-
-## Pause Rate vs Cancel Rate
-- Does a subscription pause feature reduce cancellations in this space?
-- % of "cancel" attempts that convert to pause when offered
-- Reactivation rate from paused vs hard-cancelled subscribers
-
-## Win-Back / Reactivation Playbook
-- Industry average win-back rate for this category
-- Top reactivation channels (email, SMS, paid retargeting) with conversion benchmarks
-- Typical discount depth needed to win back a cancelled subscriber
-- Optimal timing for win-back sequence (day 1, 7, 30, 60, 90?)
-
-## Dunning & Involuntary Churn Defense
-- Industry average involuntary churn from failed payments for this category
-- Smart retry logic improvement (3-day, 7-day retry window)
-- Account updater service impact on recovery rate
-- Pre-dunning SMS/email nudge benchmarks
-
-## Referral & Loyalty Program Economics
-- Average LTV uplift % for referral-acquired subscribers vs paid-ad acquired
-- Best loyalty mechanics for this category (points, tiers, early access, co-creation)
-- Net revenue retention uplift when a loyalty program is active
-
-## 2026-Specific Retention Tactics
-- AI-personalized subscription curation for this category
-- Community-driven retention (Discord, WhatsApp groups, member events)
-- Co-creation / subscriber input into product selection
-- "Pause, don't cancel" UX flows — conversion rates
-- Personalized win-back video or handwritten note programs
-- Hyperlocal NL tactics (PostNL partnerships, iDEAL billing retry, etc.)
-
-ANTI-HALLUCINATION: Every percentage must cite a real source URL from this session. If no specific data found for this category, cite nearest adjacent category and clearly label as proxy "[adjacent category proxy — no direct source found]".`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
-      });
+Return a full retention engineering report covering: retention benchmarks table, churn drivers, subscription term economics, win-back playbook, dunning defense, referral/loyalty uplift, and 2026 tactics. ANTI-HALLUCINATION: Cite real source URLs from this session.`);
       updateAgent('retentionEngineering', 'completed', 'Retention engineering report complete.');
-      const data = JSON.parse(response.text?.trim() || "{}");
-      return { raw: data.markdown || '', sources: data.sources || [] };
+      return { raw, sources: [] };
     } catch (e: any) {
       updateAgent('retentionEngineering', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
@@ -559,25 +383,12 @@ ANTI-HALLUCINATION: Every percentage must cite a real source URL from this sessi
 
   const runFoundersTeamAgent = async (): Promise<{ raw: string, sources: string[] }> => {
     updateAgent('foundersAndTeam', 'running', 'Discovering founders and linkedIn profiles...');
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        markdown: { type: Type.STRING, description: "Markdown text detailing the founders of the top companies in this category, their backgrounds, podcast appearances, and LinkedIn URLs." },
-        sources: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of URLs or report names used for this research" }
-      },
-      required: ["markdown", "sources"]
-    };
     try {
-      const response = await safeGenerate({
-        model: modelName,
-        contents: `You are an elite talent scout and investigative journalist. Find the founders or key people of the top 3 companies in the category: "${category.name}".
-        ANTI-HALLUCINATION RULE FOR LINKEDIN URLS: You may ONLY include a LinkedIn URL if you actually retrieve it via Google Search in this session. LLMs are known to hallucinate LinkedIn profile URLs — a wrong URL destroys credibility. If a search does not return a verifiable LinkedIn URL, write "LinkedIn: [not found in search]" instead of guessing. Never construct a URL from a person's name.
-        METHOD: Use Google Search with operators like site:linkedin.com/in/ "[Founder Name]" "[Company]", and search for podcast transcripts, news articles, Crunchbase profiles, and previous exits. Only include facts you can trace to a real search result. Provide factual bios in Markdown.`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
-      });
+      const raw = await searchRaw(`You are an elite talent scout and investigative journalist. Find the founders or key people of the top 3 companies in the category: "${category.name}".
+        ANTI-HALLUCINATION RULE FOR LINKEDIN URLS: Only include a LinkedIn URL if actually retrieved via Google Search in this session. If not found via search, write "LinkedIn: [not found in search]" instead of guessing.
+        METHOD: Search site:linkedin.com/in/ "[Founder Name]" "[Company]", also search for podcast transcripts, news articles, Crunchbase profiles, and previous exits. Only include facts traceable to a real search result. Return factual bios in Markdown.`);
       updateAgent('foundersAndTeam', 'completed', 'Founders identified.');
-      const data = JSON.parse(response.text?.trim() || "{}");
-      return { raw: data.markdown || '', sources: data.sources || [] };
+      return { raw, sources: [] };
     } catch (e: any) {
       updateAgent('foundersAndTeam', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
@@ -586,104 +397,25 @@ ANTI-HALLUCINATION: Every percentage must cite a real source URL from this sessi
 
   const runSearchTrendsAgent = async (): Promise<{ raw: string, sources: string[] }> => {
     updateAgent('searchTrends', 'running', 'Fetching Google Trends data (EN + NL)...');
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        markdown: { type: Type.STRING },
-        sources: { type: Type.ARRAY, items: { type: Type.STRING } }
-      },
-      required: ['markdown', 'sources']
-    };
     try {
-      const response = await safeGenerate({
-        model: modelName,
-        contents: `You are a Google Trends data analyst and market intelligence expert. Your task is to retrieve and interpret REAL, LIVE Google Trends data for the category: "${category.name}".
+      const raw = await searchRaw(`You are a Google Trends data analyst and market intelligence expert. Retrieve and interpret REAL, LIVE Google Trends data for: "${category.name}".
 
-## MANDATORY SEARCHES — You MUST execute ALL of the following Google searches in this session:
+MANDATORY SEARCHES:
+1. https://trends.google.com/trends/explore?q=${encodeURIComponent(category.name)}&geo=NL
+2. https://trends.google.com/trends/explore?q=${encodeURIComponent(category.name)}
+3. "${category.name}" Google Trends interest over time Netherlands 2024 2025
+4. "${category.name}" Dutch translation search trends NL
+5. "${category.name}" seasonal search peaks Netherlands Belgium 2024
+6. "${category.name}" vs "protein powder" vs "yoga mat" Google Trends comparison
+7. "${category.name}" rising related queries Netherlands breakout
 
-1. Visit and retrieve data from: https://trends.google.com/trends/explore?q=${encodeURIComponent(category.name)}&geo=NL (Dutch/Netherlands)
-2. Visit and retrieve data from: https://trends.google.com/trends/explore?q=${encodeURIComponent(category.name)} (Global/English)
-3. Search Google for: site:trends.google.com "${category.name}" trends NL Netherlands
-4. Search Google for: "${category.name}" Google Trends interest over time Netherlands 2024 2025
-5. Search Dutch translation of "${category.name}" on Google Trends NL — find the Dutch search term (e.g., for "yoga mat" search "yogamat" or "yoga mat kopen NL")
-6. Search: trends.google.com "${category.name}" related queries rising breakout Netherlands
-7. Search: "${category.name}" seasonal search peaks Netherlands Belgium 2024
-8. Search: "${category.name}" vs "protein powder" vs "yoga mat" Google Trends comparison (use these as benchmark anchors for scale)
-9. Search: "${category.name}" search interest rising or declining trend 2023 2024 2025
-10. Search: "${category.name}" Dutch language search terms trending NL consumer interest
+Google Trends scores are RELATIVE (0-100). Always compare to anchor categories (protein powder ~70, yoga mat ~55, pet food ~80, coffee subscription ~25) for context.
 
-## UNDERSTAND GOOGLE TRENDS NUMBERS (explain this in your report):
-- Google Trends scores are RELATIVE, not absolute. 100 = peak popularity for that term in the selected timeframe, 0 = essentially no searches.
-- The numbers are normalized relative to the highest point — so 50 means "half as searched as at its peak".
-- These numbers are NOT percentages of all searches. A "50" does NOT mean 50% of searches.
-- Always compare to at least 2 familiar anchors (e.g., "protein powder" typically scores 65-80, "yoga mat" scores 45-65, "pet food" scores 70-90, "coffee subscription" scores 20-40) to give context.
-- Example interpretation: "Score 62 for ${category.name} is similar to 'yoga mat' (60), which means it's a well-established search category — not hyper-niche, not mainstream-dominant."
+Return a comprehensive markdown report covering: interest scores (NL + global), trend direction (12 months), YoY comparison, seasonal patterns, rising queries, Dutch-specific terms, geographic distribution, and launch timing recommendations.
 
-## OUTPUT FORMAT — your markdown MUST include ALL of these sections:
-
-# 📈 Google Trends Intelligence: ${category.name}
-
-## Current Interest Score (0-100 Scale)
-- Global interest score: [number] / 100
-- Netherlands (NL) interest score: [number] / 100
-- 12-month trend direction: Rising / Stable / Declining (with % change if available)
-- Plain-language meaning: "A score of [X] means [category name] is searched [interpretation]. For comparison, 'yoga mat' scores about [Y], so this category is [more/less/equally] searched."
-
-## Comparison to Benchmark Categories
-Create a simple comparison table:
-| Category | Score | Interpretation |
-|----------|-------|----------------|
-| ${category.name} | [score] | [what it means] |
-| protein powder | ~70 | well-established |
-| yoga mat | ~55 | moderate established |
-| coffee subscription | ~25 | niche |
-| pet food | ~80 | mainstream |
-
-## Trend Direction (Last 12 Months)
-- Is interest growing, flat, or declining?
-- Key inflection points (months where interest spiked or dropped)
-- YoY comparison (2023 vs 2024 vs 2025)
-
-## Seasonal Patterns
-- Peak months (e.g., "Interest spikes 3x in December due to gift season")
-- Low months (e.g., "Summer slump in July-August")
-- Specific NL seasonal context (Dutch holidays, Sinterklaas, King's Day, etc.)
-- How to time product launches or ad spend around these patterns
-
-## Rising Related Queries (Breakout Trends)
-List the top 5-10 rising related search queries from Google Trends for this category. Flag any "Breakout" queries (queries with >5000% growth).
-
-## Dutch-Specific Search Terms (NL)
-- Primary Dutch search term(s) for this category
-- NL interest score / 100
-- Top rising Dutch queries
-- Any uniquely Dutch angle (local brands, Dutch consumer preferences)
-
-## Geographic Distribution (Netherlands)
-- Which provinces/cities in NL show highest interest
-- Any regional patterns relevant for targeting
-
-## Competitor Comparison on Google Trends
-Compare search interest for top 3 brands/products IN this category:
-| Brand/Product | Score | Trend |
-|---------------|-------|-------|
-
-## Key Takeaways for DTC Launch Timing
-- Best month to launch in NL based on trend data
-- Whether to front-load or back-load ad spend based on seasonality
-- Any trend that suggests growing consumer interest (tailwind) or saturation risk
-
-ANTI-HALLUCINATION RULES:
-- Every score must come from actual Google Trends data retrieved in this session via Google Search
-- If you cannot retrieve a specific Trends score, write "[score not retrieved — estimate based on adjacent data: X]"
-- Do NOT invent trend numbers. Use the search tools to get real data.
-- Only include rising queries that appear in actual Google Trends results
-- All sources must be real URLs from this session`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
-      });
+ANTI-HALLUCINATION: Only return scores retrieved from real searches. Write "[score not retrieved]" if data not accessible.`);
       updateAgent('searchTrends', 'completed', 'Search trends data retrieved.');
-      const data = JSON.parse(response.text?.trim() || "{}");
-      return { raw: data.markdown || '', sources: data.sources || [] };
+      return { raw, sources: [] };
     } catch (e: any) {
       updateAgent('searchTrends', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
@@ -815,16 +547,15 @@ export async function discoverDtcCategories(
     type: Type.OBJECT,
     properties: {
       sectors: { type: Type.ARRAY, items: { type: Type.STRING } },
-      sources: { type: Type.ARRAY, items: { type: Type.STRING }, description: "URLs confirming these sectors have active DTC businesses (optional but encouraged)" }
-    }
+    },
+    required: ["sectors"]
   };
 
-  const schema = {
+  const categorySchema = {
     type: Type.OBJECT,
     properties: {
       categories: {
         type: Type.ARRAY,
-        description: "List of highly specific new sub-categories found.",
         items: {
           type: Type.OBJECT,
           properties: {
@@ -834,7 +565,7 @@ export async function discoverDtcCategories(
             estimatedCAC: { type: Type.NUMBER },
             monthlyChurnPercent: { type: Type.NUMBER },
             marketSizeNL: { type: Type.STRING },
-            audienceSizeNL: { type: Type.STRING, description: "Highly realistic exact number of people in NL qualified. E.g. '15,000 users'" },
+            audienceSizeNL: { type: Type.STRING },
             marketSizeScore: { type: Type.NUMBER },
             storyDepth: { type: Type.NUMBER },
             microNichePotential: { type: Type.NUMBER },
@@ -842,8 +573,8 @@ export async function discoverDtcCategories(
             emotionalLoyalty: { type: Type.STRING, enum: ["Low", "Medium", "High"] },
             realMonthlyConsumption: { type: Type.BOOLEAN },
             monthlyConsumptionReason: { type: Type.STRING },
-            notes: { type: Type.STRING, description: "Why this fits the criteria perfectly. What is the hyper-specific angle? Include your TAM→SOM funnel steps." },
-            sources: { type: Type.ARRAY, items: { type: Type.STRING }, description: "At least 1 real URL found via search proving this category has active businesses. Mandatory — categories without a source will be rejected." }
+            notes: { type: Type.STRING },
+            sources: { type: Type.ARRAY, items: { type: Type.STRING } }
           },
           required: ["name", "targetAudience", "sources"]
         }
@@ -865,23 +596,39 @@ export async function discoverDtcCategories(
     try {
       const avoidedSectorsText = searchedSectors.size > 0 ? `DO NOT SUGGEST THESE SECTORS (we already mapped them): ${Array.from(searchedSectors).join(", ")}.` : "";
       
-      const response = await safeGenerate({
+      // Pass 1: search for sectors (plain text — JSON mode + googleSearch unsupported together)
+      const sectorText = await safeGenerate({
         model: modelName,
         contents: `You are an endless, elite private equity mapping system. Return a completely new list of 5 distinct consumer product sectors where subscription/high-loyalty DTC models are viable.
-        CRITICAL: Rotate randomly through drastically different areas. Sometimes pick Beauty/Makeup, sometimes Hardware Subscriptions, sometimes Pets, Home, Vitamins, Wearables, Kid stuff, etc. Be as randomized and broad as possible across the entire global economy so we don't miss emerging opportunities.
-        ANTI-HALLUCINATION: Use search to verify each sector. Only include sectors with real, currently operating DTC businesses. Do not suggest theoretical or purely emerging sectors with no live players.
+        CRITICAL: Rotate randomly through drastically different areas. Sometimes pick Beauty/Makeup, sometimes Hardware Subscriptions, sometimes Pets, Home, Vitamins, Wearables, Kid stuff, etc.
+        ANTI-HALLUCINATION: Use search to verify each sector. Only include sectors with real, currently operating DTC businesses.
         ${avoidedSectorsText}
-        Return ONLY the list.`,
-        config: { responseMimeType: "application/json", responseSchema: sectorSchema, tools: [{ googleSearch: {} }] }
+        Return ONLY the 5 sector names, one per line, with no bullet points or numbering.`,
+        config: { tools: [{ googleSearch: {} }] }
       });
       if (signal.aborted) return;
 
-      sectors = JSON.parse(response.text?.trim() || "{}").sectors || [];
+      // Parse plain-text list of sector names
+      const rawText = sectorText.text?.trim() || '';
+      sectors = rawText.split('\n').map((s: string) => s.replace(/^[-*\d.\s]+/, '').trim()).filter(Boolean).slice(0, 8);
+
+      if (sectors.length === 0) {
+        // Fallback: try extracting via JSON schema from the raw text
+        try {
+          const extracted = await safeGenerate({
+            model: modelName,
+            contents: `Extract the list of consumer product sectors from this text as a JSON array:\n\n${rawText}`,
+            config: { responseMimeType: "application/json", responseSchema: sectorSchema }
+          });
+          sectors = JSON.parse(extracted.text?.trim() || '{}').sectors || [];
+        } catch { /* ignore fallback failure */ }
+      }
+
       log(`Successfully mapped ${sectors.length} new distinct sectors.`);
       updateProgress({ totalIndustries: progress.totalIndustries + sectors.length });
     } catch (e: any) {
       log(`Sector mapping turbulence: ${e.message}`);
-      await new Promise(r => setTimeout(r, 2000)); // slight backoff
+      await new Promise(r => setTimeout(r, 2000));
       continue;
     }
 
@@ -903,16 +650,26 @@ export async function discoverDtcCategories(
           ? `DO NOT SUGGEST ANY OF THE FOLLOWING EXACT OR SIMILAR CATEGORIES (WE ALREADY HAVE THEM TRACKED): ${currentAvoidCategories.join(", ")}.\n\n`
           : "";
 
-        const prompt = `${userPrompt}\n\n${existingInfo}YOUR MISSION NOW: Deep-dive specifically into the sector: "${sector}". Discover 2 to 4 HYPER-SPECIFIC, highly profitable micro-categories within this sector that fit all constraints.\n\nCRITICAL ANTI-HALLUCINATION CONSTRAINTS:\n1. DO NOT INVENT categories. Only suggest categories that have REAL, NAMED, OPERATIONAL businesses already serving them. Use Google Search to verify each one before including it.\n2. For EVERY category you return, you MUST include at least one real URL in the sources array (a live business homepage, a market report, a Reddit thread) that proves this niche exists with real demand. Categories without a verifiable source MUST be excluded.\n3. For "audienceSizeNL": output a brutally realistic number (e.g. "12,500 people") and show your full TAM→SAM→SOM funnel in notes with each filter step. Never skip steps.\n4. TAM/SAM/SOM reduction: [Total NL 18M] → [Correct Age/Gender] → [Income Bracket] → [% experiencing the exact problem]. Use census or CBS.nl data where possible.\n5. If a statistic (CLV, CAC, churn) cannot be found via search, output 0 — a sourced zero is more trustworthy than an invented number.`;
+        const prompt = `${userPrompt}\n\n${existingInfo}YOUR MISSION NOW: Deep-dive specifically into the sector: "${sector}". Discover 2 to 4 HYPER-SPECIFIC, highly profitable micro-categories within this sector that fit all constraints.\n\nCRITICAL ANTI-HALLUCINATION CONSTRAINTS:\n1. DO NOT INVENT categories. Only suggest categories with REAL, NAMED, OPERATIONAL businesses already serving them.\n2. For every category, verify with Google Search. Include at least one real source URL per category.\n3. For audienceSizeNL: show TAM→SAM→SOM funnel in notes with each filter step.\n4. If CLV/CAC/churn cannot be found via search, output 0.\n\nFor each category, output a DETAILED description including: exact name, target audience, estimated metrics, TAM→SOM funnel, real business examples, and source URLs.`;
 
-        const response = await safeGenerate({
+        // Pass 1: grounded search → rich text description of categories
+        const searchResp = await safeGenerate({
           model: modelName,
           contents: prompt,
-          config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] }
+          config: { tools: [{ googleSearch: {} }] }
+        });
+        if (signal.aborted) return;
+        const rawCategoryText = searchResp.text?.trim() || '';
+
+        // Pass 2: extract structured category objects from the text
+        const extractResp = await safeGenerate({
+          model: modelName,
+          contents: `Extract the DTC subscription category data from the research text below. Return only categories with a non-empty sources array (at least 1 real URL). For missing numeric fields use 0.\n\n---\n${rawCategoryText.slice(0, 25000)}`,
+          config: { responseMimeType: "application/json", responseSchema: categorySchema }
         });
         if (signal.aborted) return;
 
-        const data = JSON.parse(response.text?.trim() || "{}");
+        const data = JSON.parse(extractResp.text?.trim() || "{}");
         const found = data.categories || [];
         
         log(`Agent extracted ${found.length} valid entities from [${sector}].`);
@@ -1025,7 +782,7 @@ ANTI-HALLUCINATION: Only return prices/products you actually found on their live
 Match to an existing category if relevant: [${input.existingCategoryNames?.join(', ')}]`,
         { inlineData: { data: input.imageData, mimeType: input.mimeType } }
       ],
-      config: { responseMimeType: "application/json", responseSchema: pass1Schema, tools: [{ googleSearch: {} }] },
+      config: { responseMimeType: "application/json", responseSchema: pass1Schema },
     });
     pass1Data = JSON.parse(res.text?.trim() || '{}');
   } catch (e: any) {
@@ -1074,9 +831,14 @@ ANTI-HALLUCINATION — non-negotiable:
 - LinkedIn URL: ONLY include if you actually retrieved it from a search result in this session. Never construct from a name. If not found, write "LinkedIn: [not retrieved via search]".
 - Employee count: only report the exact range LinkedIn shows. Never estimate.
 - All facts must trace to a URL. Write "Not found via search" if unavailable.`,
-      config: { responseMimeType: "application/json", responseSchema: pass2Schema, tools: [{ googleSearch: {} }] },
+      config: { tools: [{ googleSearch: {} }] },
     });
-    pass2Data = JSON.parse(res.text?.trim() || '{}');
+    const pass2Res = await go({
+      model: modelName,
+      contents: `Extract structured founders/team data about "${companyName}" from this research:\n\n---START---\n${(res.text?.trim() || '').slice(0, 30000)}\n---END---`,
+      config: { responseMimeType: "application/json", responseSchema: pass2Schema },
+    });
+    pass2Data = JSON.parse(pass2Res.text?.trim() || '{}');
   } catch (e: any) {
     report(`Pass 2 error: ${e.message}`);
   }
@@ -1123,9 +885,14 @@ MANDATORY SEARCHES — run ALL of these:
 - "${companyName}" site:sec.gov — SEC filings if publicly traded or Reg-CF/Reg-A
 
 ANTI-HALLUCINATION: Every figure must trace to a real URL from this session. If no funding found, write "No funding found via search — likely bootstrapped or undisclosed". Never invent investors, round sizes, or revenue.`,
-      config: { responseMimeType: "application/json", responseSchema: pass3Schema, tools: [{ googleSearch: {} }] },
+      config: { tools: [{ googleSearch: {} }] },
     });
-    pass3Data = JSON.parse(res.text?.trim() || '{}');
+    const pass3Res = await go({
+      model: modelName,
+      contents: `Extract structured funding and traction data about "${companyName}" from this research:\n\n---START---\n${(res.text?.trim() || '').slice(0, 30000)}\n---END---`,
+      config: { responseMimeType: "application/json", responseSchema: pass3Schema },
+    });
+    pass3Data = JSON.parse(pass3Res.text?.trim() || '{}');
   } catch (e: any) {
     report(`Pass 3 error: ${e.message}`);
   }
@@ -1170,9 +937,14 @@ MANDATORY SEARCHES — run ALL of these:
 - "${companyName}" "promo code" OR "${companyName}" affiliate program — growth channels
 
 ANTI-HALLUCINATION: Social handles must come from real search results. Never construct @handles. All facts must have source URLs. Write "Not found via search" for anything not confirmed.`,
-      config: { responseMimeType: "application/json", responseSchema: pass4Schema, tools: [{ googleSearch: {} }] },
+      config: { tools: [{ googleSearch: {} }] },
     });
-    pass4Data = JSON.parse(res.text?.trim() || '{}');
+    const pass4Res = await go({
+      model: modelName,
+      contents: `Extract structured PR, social media, and competitive data about "${companyName}" from this research:\n\n---START---\n${(res.text?.trim() || '').slice(0, 30000)}\n---END---`,
+      config: { responseMimeType: "application/json", responseSchema: pass4Schema },
+    });
+    pass4Data = JSON.parse(pass4Res.text?.trim() || '{}');
   } catch (e: any) {
     report(`Pass 4 error: ${e.message}`);
   }
