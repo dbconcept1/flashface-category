@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Category, Weights } from '../types';
 import { calculateDecisionScore, calculateLtvCac, getMacroSector, cn } from '../utils';
-import { MessageSquare, Send, Square, Plus, Settings2, Loader2, User, Bot, ChevronDown } from 'lucide-react';
+import {
+  MessageSquare, Send, Square, Plus, Settings2, Loader2,
+  User, Bot, ChevronDown, ChevronUp, Copy, CheckCircle2,
+} from 'lucide-react';
 import { getOpenAiApiKey } from '../lib/settings';
 
 interface Props {
@@ -17,61 +20,193 @@ interface Message {
   streaming?: boolean;
 }
 
-const SYSTEM_PROMPT = `You are a strategic advisor for FlashFace OS, a Dutch DTC (Direct-to-Consumer) category scouting and decision platform. Your job is to help the operator evaluate, compare, and improve their portfolio of business categories.
+// ─────────────────────────────────────────────────────────────────────────────
+// SYSTEM PROMPT — paste this into your Custom GPT's Instructions field on
+// chatgpt.com once. Every field, formula, and behaviour is documented here
+// so ChatGPT understands the full FlashFace OS data model.
+// ─────────────────────────────────────────────────────────────────────────────
+const SYSTEM_PROMPT = `# FlashFace OS — Strategic Advisor
 
-## What FlashFace OS does
-FlashFace OS researches, scores, and ranks potential DTC subscription-first categories — primarily aimed at the Dutch (NL) market but with global benchmarks. Every category goes through AI research (9 specialist agents) and human review before being promoted from "Researching" → "Shortlisted" → "Winner" (or "Killed").
+You are a strategic advisor embedded in FlashFace OS, a Dutch DTC (Direct-to-Consumer) category scouting and decision platform. Your job is to help the operator evaluate, compare, and improve their portfolio of business categories.
 
-## Scoring Formula
-Each category receives a Decision Score (0–100) based on a weighted combination of 7 factors:
-1. CLV Score = (estimatedCLV / highest CLV in portfolio) × 100
-2. Retention Score = 100 − monthlyChurnPercent
-3. Acquisition Score: Easy=100, Medium=60, Hard=30
-4. Market Size Score = manual 0–100 rating
-5. Loyalty Score: High=100, Medium=60, Low=30
-6. Story Depth = storyDepth (0–10) × 10
-7. Micro-Niche = microNichePotential (0–10) × 10
-Final score ×1.05 if brandType is "Solution-based".
+## What FlashFace OS is
 
-## Key Fields
-- estimatedCLV: Lifetime revenue per customer (€)
-- estimatedCAC: Cost to acquire one customer (€)
-- monthlyChurnPercent: % who cancel per month
-- LTV:CAC = CLV ÷ CAC. Below 2× is risky, above 3× is healthy
-- CAGR: Market compound annual growth rate
-- tamNL/samNL/somNL: Total/Serviceable/Obtainable market count in Netherlands
-- marketSizeScore: Manual 0–100 rating of NL + EU + growth opportunity
-- acquisitionDifficulty: Easy / Medium / Hard
-- emotionalLoyalty: Low / Medium / High
-- brandType: Solution-based (pain-solving) or Aesthetic-Pleasure (desire-driven)
-- awarenessLevel: Unaware → Problem-aware → Solution-aware → Product-aware
-- storyDepth (0–10): Brand narrative richness and differentiation
-- microNichePotential (0–10): Specificity and defensibility of niche
-- status: Researching → Shortlisted → Winner (or Killed)
-- realMonthlyConsumption: Whether product is genuinely consumed monthly (key for subscriptions)
-- CLV=€0 means AI research not yet completed — treat as unscored
+FlashFace OS is used to research, score, and rank potential DTC subscription-first business categories — primarily aimed at the Dutch (NL) market but with global benchmarks. Every category goes through 10 AI research agents and human review before being promoted along the pipeline:
+
+  Researching → Shortlisted → Winner (or Killed)
+
+IMPORTANT: "Researching" is a pipeline STATUS LABEL, not an indication that research is currently running. A category can sit in "Researching" for days while the operator thinks about it.
+
+## Data Structure: How Session Data Is Formatted
+
+When the operator pastes their session data, it follows this format:
+
+  ## [Category Name] [STATUS] Score:[X]/100
+  Sector: [macro sector] ([industry])
+  CLV €[X] | CAC €[X] | LTV:CAC [X]x | Churn [X]% | CAGR [X]
+  Market Score:[X]/100 | Acq:[difficulty] | Loyalty:[level] | Brand:[type] | Story:[X]/10 | Niche:[X]/10 | Awareness:[level]
+  NL Funnel: TAM [X] | SAM [X] | SOM [X]
+  Audience: [target audience description]
+  NL Market: [market size narrative]
+  Global Market: [global market narrative]
+  EU Market: [EU market narrative]
+  Legal/Regulatory Risk NL: [Low/Medium/High] — [details]
+  Monthly Consumption: Yes/No — [reason]
+  Idea Context: [original idea note]
+  Notes: [operator notes]
+  Unit Econ: [AI research summary]
+  Market Dyn: [AI research summary]
+  Local Comp: [AI research summary]
+  Global Comp: [AI research summary]
+  Legal: [AI research summary]
+  Suppliers: [AI research summary]
+  Founders: [AI research summary]
+  Ads: [AI research summary]
+  Retention: [AI research summary]
+  Search Trends: [AI research summary]
+
+## Decision Score Formula (0–100)
+
+Each category is scored by combining 7 weighted factors:
+
+  1. CLV Score     = (estimatedCLV / max CLV in portfolio) × 100
+                     — relative lifetime value; the best CLV always scores 100
+  2. Retention     = 100 − monthlyChurnPercent
+                     — 0% churn → 100 pts; 10% churn → 90 pts
+  3. Acquisition   = Easy 100pts / Medium 60pts / Hard 30pts
+  4. Market Size   = Manual 0–100 rating (see scale below)
+  5. Loyalty       = High 100pts / Medium 60pts / Low 30pts
+  6. Story Depth   = storyDepth (0–10) × 10
+  7. Micro-Niche   = microNichePotential (0–10) × 10
+
+  Final = weighted_average(above 7) × brandMultiplier
+  brandMultiplier = 1.05 if brandType is "Solution-based", 1.00 if "Aesthetic-Pleasure"
+
+  Weights are shown in each session data header (operator-adjustable).
+
+## All Fields Explained
+
+### Financial Fields
+- estimatedCLV (€): Predicted total revenue from one customer over their lifetime.
+  CLV = €0 means AI research hasn't completed yet — treat as unscored.
+- estimatedCAC (€): Estimated cost to acquire one customer (ads + commissions + tools).
+- monthlyChurnPercent (%): % of subscribers who cancel each month.
+  Lower is better. Below 3% is excellent for DTC subscription.
+- LTV:CAC ratio = estimatedCLV ÷ estimatedCAC.
+  Below 1× = burning money. Below 2× = risky. 3×+ = healthy. 5×+ = exceptional.
+- CAGR: Compound Annual Growth Rate of the market (string, e.g. "18% CAGR 2024-2028").
+
+### Market Fields
+- marketSizeScore (0–100): Manual operator rating combining NL market size, EU potential, and growth rate.
+  Scale: 90+ = massive global trend | 70–89 = strong NL/EU opportunity | 50–69 = viable niche |
+         30–49 = small niche, high execution risk | below 30 = micro-niche.
+- marketSizeNL: Narrative description of the Dutch addressable market.
+- marketSizeEU: Narrative description of the EU addressable market.
+- marketSizeGlobal: Narrative description of the global market.
+- audienceSizeNL: Legacy string estimate of NL audience size (older categories).
+
+### NL Funnel: TAM → SAM → SOM
+- tamNL (number): Total Addressable Market — everyone in NL who could theoretically be a customer.
+- samNL (number): Serviceable Addressable Market — reachable via digital/social channels and geography.
+- somNL (number): Serviceable Obtainable Market — realistic buyers given budget, need, and awareness.
+- funnelBreakdownNL: Step-by-step narrative showing how each filter reduces the funnel (with source citations).
+
+### Qualitative Fields
+- acquisitionDifficulty: How hard it is to get a customer.
+  Easy = high search intent or virality | Medium = standard paid/social | Hard = education required first.
+- emotionalLoyalty: How emotionally attached customers become.
+  High = identity-driven or habitual | Medium = regular but replaceable | Low = price-sensitive commodity.
+- brandType: "Solution-based" (solves a real daily problem = stronger retention) vs "Aesthetic-Pleasure" (desire-driven = look/feel/aspirational).
+- awarenessLevel: Where the target audience sits on the awareness ladder:
+  Unaware → Problem-aware → Solution-aware → Product-aware.
+- storyDepth (0–10): How rich, differentiated, and communicable the brand narrative is. 8+ = outstanding.
+- microNichePotential (0–10): How specifically targeted and defensible the niche is. 8+ = very tight niche.
+- realMonthlyConsumption (true/false): Does the product have genuine monthly consumable demand?
+  This is CRITICAL for subscription models — false = subscription is forced, higher churn risk.
+- monthlyConsumptionReason: Explanation of why (or why not) monthly consumption is real.
+- industry: Industry tag (e.g. "Sleep supplements", "Pet nutrition").
+- Sector: Macro-sector derived from industry (e.g. "Health, Wellness & Biohacking").
+
+### Legal & Regulatory
+- regulatoryRiskNL: Low / Medium / High risk of Dutch regulatory issues (ACM, NVWA, GDPR, advertising rules).
+- legalAndAdRestrictions: Summary of specific legal restrictions or ad platform limitations in the Netherlands.
+
+### Pipeline & Meta
+- status: Researching | Shortlisted | Winner | Killed
+  Researching = early stage or needs more info
+  Shortlisted = strong candidate, all research done, operator is deciding
+  Winner = committed to building — focus suggestions on execution, not re-evaluation
+  Killed = deliberately rejected — do NOT recommend reviving unless explicitly asked
+- notionIdea: The original idea text when this category was first imported from Notion or pasted in.
+- notes: Operator notes — these are the most current manual thoughts; weigh heavily.
+- researchSources: List of URLs used by AI agents during research.
+
+### AI Agent Research Summaries
+10 specialist AI agents run in parallel. Each produces a research report stored as text:
+- Unit Econ: CLV/CAC benchmarks, pricing models, LTV research
+- Market Dyn: Market sizes, CAGR, churn benchmarks, TAM→SAM→SOM funnel logic
+- Local Comp: Dutch/EU competitor landscape, Trustpilot data, SimilarWeb estimates
+- Global Comp: US/global DTC leaders, ProductHunt, ExplodingTopics, founder stories
+- Legal: Dutch regulatory risk, NVWA/ACM/GDPR, ad platform restrictions
+- Suppliers: Alibaba, 1688.com, Faire, Ankorstore, Dutch 3PL/fulfillment options, COGs
+- Founders: Key people at top competitor companies, LinkedIn profiles, exits
+- Ads: Meta/TikTok/Google Ads benchmarks, CPM/CAC, influencer strategy, UGC angles
+- Retention: Cohort retention, churn drivers, win-back campaigns, dunning, LTV uplift
+- Search Trends: Google Trends NL + global, seasonality, rising queries, launch timing
 
 ## NL Market Context
-Operator is based in Netherlands (17.9M population, ~8M households). Dutch regulatory environment (ACM, NVWA, GDPR). All local competitor analysis is NL-focused.
 
-## Category Status Logic
-- Killed: consciously rejected — do not recommend reviving unless asked
-- Winner: committed — focus on execution
-- Shortlisted: prime candidates for comparison
-- Researching: needs gap analysis
+- Country: Netherlands (NL) — 17.9M population, ~8M households, ~70% e-commerce penetration
+- Base currency: EUR (€)
+- Regulatory bodies: ACM (consumer authority), NVWA (product safety), Autoriteit Persoonsgegevens (GDPR)
+- All local competitor analysis is Netherlands-focused
+- Dutch consumer research (CBS, KVK) used for market sizing
 
-## How to help
-When you receive live portfolio data, immediately:
-1. Summarise top 3 opportunities by Decision Score with a one-line verdict
-2. Flag categories with LTV:CAC < 2× as financial risk
-3. Note any categories with missing CLV (€0) needing research
-4. Then wait for specific questions
+## How to Behave
 
-You excel at: ranking & comparison, gap analysis, financial modelling, ad creative strategy, retention tactics, challenge mode (steelmanning why a winner could fail), adjacent niche discovery, and go/no-go decisions.`;
+When the operator shares session data (the portfolio paste), IMMEDIATELY:
+1. Parse and acknowledge the number of categories received
+2. Show the top 3 by Decision Score with a one-line verdict for each
+3. Flag any categories with LTV:CAC < 2× as financial risk
+4. Flag any categories showing CLV = €0 (research incomplete)
+5. Then wait for their specific questions — do not overwhelm upfront
 
+Excel at:
+- Ranking: "Which 2 should I focus on first and why?"
+- Gap analysis: "What's the weakest part of my research on [category]?"
+- Financial modelling: "If CAC rises to €120, which categories are still viable?"
+- Ad strategy: Using the Ads research summary to suggest channels and hooks
+- Retention tactics: Using the Retention research to prioritise LTV levers
+- Challenge mode: "Steelman why [highest-scoring category] could still fail"
+- Go/No-Go: "Give me a final verdict on [category] — should I build it or kill it?"
+- Competitive positioning: "How should I position vs [competitor]?"
+- Adjacent discovery: "What similar niches should I explore given my winning criteria?"
+
+When the operator says "here's my data" or pastes a block starting with "# FlashFace OS", treat that as the portfolio upload and immediately analyse it.`;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SESSION DATA BUILDER — all fields, all agents, clearly labeled
+// ─────────────────────────────────────────────────────────────────────────────
 function buildSessionData(categories: Category[], weights: Weights, maxClv: number): string {
   const now = new Date().toLocaleString('nl-NL', { timeZone: 'Europe/Amsterdam' });
-  const header = `# FlashFace OS — Live Portfolio Data\nGenerated: ${now}\nActive: ${categories.filter(c => c.status !== 'Killed').length} | Total: ${categories.length} | Winners: ${categories.filter(c => c.status === 'Winner').length} | Shortlisted: ${categories.filter(c => c.status === 'Shortlisted').length} | Killed: ${categories.filter(c => c.status === 'Killed').length}\n\nScore Weights: CLV ${weights.clv} | Retention ${weights.retention} | Acquisition ${weights.acquisition} | Market Size ${weights.marketSize} | Loyalty ${weights.loyalty} | Story Depth ${weights.storyDepth} | Micro-Niche ${weights.microNiche}\n\n---\n`;
+
+  const header = [
+    `# FlashFace OS — Portfolio Session Data`,
+    `Generated: ${now} (Amsterdam time)`,
+    ``,
+    `## Portfolio Summary`,
+    `Total categories: ${categories.length}`,
+    `Active (not Killed): ${categories.filter(c => c.status !== 'Killed').length}`,
+    `Winners: ${categories.filter(c => c.status === 'Winner').length}`,
+    `Shortlisted: ${categories.filter(c => c.status === 'Shortlisted').length}`,
+    `Researching: ${categories.filter(c => c.status === 'Researching').length}`,
+    `Killed: ${categories.filter(c => c.status === 'Killed').length}`,
+    ``,
+    `## Score Weights (current session)`,
+    `CLV: ${weights.clv} | Retention: ${weights.retention} | Acquisition: ${weights.acquisition} | Market Size: ${weights.marketSize} | Loyalty: ${weights.loyalty} | Story Depth: ${weights.storyDepth} | Micro-Niche: ${weights.microNiche}`,
+    ``,
+    `---`,
+  ].join('\n');
 
   const rows = [...categories]
     .sort((a, b) => calculateDecisionScore(b, weights, maxClv) - calculateDecisionScore(a, weights, maxClv))
@@ -79,37 +214,149 @@ function buildSessionData(categories: Category[], weights: Weights, maxClv: numb
       const score = calculateDecisionScore(c, weights, maxClv);
       const ltvCac = calculateLtvCac(c.estimatedCLV, c.estimatedCAC);
       const sector = getMacroSector(c.industry);
-      const lines = [
+
+      const lines: string[] = [
         `## ${c.name} [${c.status.toUpperCase()}] Score:${score}/100`,
-        `Sector: ${sector}${c.industry ? ` (${c.industry})` : ''} | CLV €${c.estimatedCLV} | CAC €${c.estimatedCAC} | LTV:CAC ${ltvCac}x | Churn ${c.monthlyChurnPercent}%${c.cagr ? ` | CAGR ${c.cagr}` : ''}`,
-        `Market Score:${c.marketSizeScore}/100 | Acq:${c.acquisitionDifficulty} | Loyalty:${c.emotionalLoyalty} | Brand:${c.brandType} | Story:${c.storyDepth}/10 | Niche:${c.microNichePotential}/10 | Awareness:${c.awarenessLevel}`,
+        `Sector: ${sector}${c.industry ? ` (${c.industry})` : ''}`,
+        `CLV €${c.estimatedCLV} | CAC €${c.estimatedCAC} | LTV:CAC ${ltvCac}x | Monthly Churn ${c.monthlyChurnPercent}%${c.cagr ? ` | CAGR ${c.cagr}` : ''}`,
+        `Market Score: ${c.marketSizeScore}/100 | Acquisition Difficulty: ${c.acquisitionDifficulty} | Emotional Loyalty: ${c.emotionalLoyalty}`,
+        `Brand Type: ${c.brandType} | Story Depth: ${c.storyDepth}/10 | Micro-Niche Potential: ${c.microNichePotential}/10 | Awareness Level: ${c.awarenessLevel}`,
+        `Monthly Consumption: ${c.realMonthlyConsumption ? 'YES' : 'NO'}${c.monthlyConsumptionReason ? ` — ${c.monthlyConsumptionReason}` : ''}`,
       ];
-      if (c.tamNL || c.samNL || c.somNL) lines.push(`NL Funnel: TAM ${c.tamNL?.toLocaleString() ?? '?'} | SAM ${c.samNL?.toLocaleString() ?? '?'} | SOM ${c.somNL?.toLocaleString() ?? '?'}`);
-      if (c.targetAudience) lines.push(`Audience: ${c.targetAudience}`);
+
+      if (c.tamNL || c.samNL || c.somNL) {
+        lines.push(`NL Funnel: TAM ${c.tamNL?.toLocaleString() ?? '?'} → SAM ${c.samNL?.toLocaleString() ?? '?'} → SOM ${c.somNL?.toLocaleString() ?? '?'}`);
+      }
+      if (c.funnelBreakdownNL) {
+        lines.push(`Funnel Logic: ${c.funnelBreakdownNL.slice(0, 400)}${c.funnelBreakdownNL.length > 400 ? '…' : ''}`);
+      }
+      if (c.targetAudience) lines.push(`Target Audience: ${c.targetAudience}`);
       if (c.marketSizeNL) lines.push(`NL Market: ${c.marketSizeNL}`);
-      if (c.notes) lines.push(`Notes: ${c.notes.slice(0, 200)}`);
+      if (c.marketSizeGlobal) lines.push(`Global Market: ${c.marketSizeGlobal}`);
+      if (c.marketSizeEU) lines.push(`EU Market: ${c.marketSizeEU}`);
+      if (c.regulatoryRiskNL) lines.push(`Regulatory Risk NL: ${c.regulatoryRiskNL}`);
+      if (c.legalAndAdRestrictions) lines.push(`Legal/Ad Restrictions: ${c.legalAndAdRestrictions}`);
+      if (c.notionIdea) lines.push(`Original Idea: ${c.notionIdea.slice(0, 300)}${c.notionIdea.length > 300 ? '…' : ''}`);
+      if (c.notes) lines.push(`Operator Notes: ${c.notes.slice(0, 300)}${c.notes.length > 300 ? '…' : ''}`);
+
       const agents = c.agentResults ?? {};
       const agentKeys: Array<[keyof typeof agents, string]> = [
-        ['unitEconomics', 'Unit Econ'], ['marketDynamics', 'Market Dyn'], ['localCompetitors', 'Local Comp'],
-        ['globalCompetitors', 'Global Comp'], ['legalLogistics', 'Legal'], ['suppliersBudget', 'Suppliers'],
-        ['foundersAndTeam', 'Founders'], ['adIntelligence', 'Ads'], ['retentionEngineering', 'Retention'],
+        ['unitEconomics',       'Unit Econ'],
+        ['marketDynamics',      'Market Dyn'],
+        ['localCompetitors',    'Local Comp (NL)'],
+        ['globalCompetitors',   'Global Comp'],
+        ['legalLogistics',      'Legal'],
+        ['suppliersBudget',     'Suppliers & Budget'],
+        ['foundersAndTeam',     'Founders'],
+        ['adIntelligence',      'Ad Intelligence'],
+        ['retentionEngineering','Retention Engineering'],
+        ['searchTrends',        'Search Trends'],
       ];
       for (const [key, label] of agentKeys) {
         const val = agents[key];
-        if (val) lines.push(`${label}: ${val.slice(0, 350)}${val.length > 350 ? '…' : ''}`);
+        if (val && !val.startsWith('Error:')) {
+          lines.push(`${label}: ${val.slice(0, 400)}${val.length > 400 ? '…' : ''}`);
+        } else if (val?.startsWith('Error:')) {
+          lines.push(`${label}: [Research failed — retry in app]`);
+        }
       }
+
       return lines.join('\n');
     });
 
-  return header + rows.join('\n\n---\n\n');
+  return header + '\n\n' + rows.join('\n\n---\n\n');
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+function CopyButton({ text, label, small }: { text: string; label: string; small?: boolean }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const el = document.createElement('textarea');
+      el.value = text;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className={cn(
+        'flex items-center gap-2 rounded-xl font-semibold transition-all duration-200',
+        small ? 'px-3 py-2 text-xs' : 'px-4 py-2.5 text-sm',
+        copied
+          ? 'bg-emerald-600/20 border border-emerald-500/40 text-emerald-400'
+          : 'bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white'
+      )}
+    >
+      {copied ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+      {copied ? 'Copied!' : label}
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+function SetupPanel({ categories, weights, maxClv }: { categories: Category[]; weights: Weights; maxClv: number }) {
+  const [open, setOpen] = useState(false);
+  const sessionData = buildSessionData(categories, weights, maxClv);
+
+  return (
+    <div className="shrink-0 border-b border-gray-900 bg-[#080808]">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-5 py-3 hover:bg-gray-900/40 transition-colors"
+      >
+        <div className="flex items-center gap-2.5">
+          <span className="text-[10px] font-mono text-gray-500 uppercase tracking-widest">Custom GPT Setup</span>
+          <span className="text-[10px] font-mono px-2 py-0.5 rounded border text-gray-500 bg-gray-900 border-gray-800">
+            chatgpt.com
+          </span>
+        </div>
+        {open ? <ChevronUp className="w-3.5 h-3.5 text-gray-600" /> : <ChevronDown className="w-3.5 h-3.5 text-gray-600" />}
+      </button>
+
+      {open && (
+        <div className="px-5 pb-5 space-y-4">
+          <p className="text-xs text-gray-500">
+            If you use <span className="text-gray-300">chatgpt.com</span> Custom GPTs, do this once to configure it, then paste session data each conversation.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
+              <div>
+                <p className="text-xs font-semibold text-white">Step 1 — One time</p>
+                <p className="text-[11px] text-gray-500 mt-0.5">Paste into your Custom GPT's <span className="text-gray-400">Instructions</span> field on chatgpt.com</p>
+              </div>
+              <CopyButton text={SYSTEM_PROMPT} label="Copy System Prompt" small />
+            </div>
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
+              <div>
+                <p className="text-xs font-semibold text-white">Step 2 — Each session</p>
+                <p className="text-[11px] text-gray-500 mt-0.5">Paste as your first message. ChatGPT instantly knows your full portfolio.</p>
+              </div>
+              <CopyButton text={sessionData} label={`Copy Session Data (${categories.length} categories)`} small />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 const STARTERS = [
   'What are my top 3 opportunities right now?',
   'Which categories have LTV:CAC below 2× (financial risk)?',
-  'Compare my Shortlisted categories and recommend one.',
-  'Challenge my highest-scoring category — why might it fail?',
-  'What adjacent niches should I explore given my winning criteria?',
+  'Compare my Shortlisted categories and recommend one to build.',
+  'Challenge my highest-scoring category — why might it still fail?',
+  'What adjacent niches should I explore given my current winners?',
 ];
 
 function MessageBubble({ msg }: { msg: Message }) {
@@ -142,6 +389,7 @@ function MessageBubble({ msg }: { msg: Message }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Props) {
   const apiKey = getOpenAiApiKey();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -294,29 +542,34 @@ export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Pro
     e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
   };
 
+  // ── No API key ─────────────────────────────────────────────────────────────
   if (!apiKey) {
     return (
-      <div className="h-full flex items-center justify-center px-6">
-        <div className="max-w-md w-full bg-gray-950 border border-gray-800 rounded-2xl p-8 space-y-5 text-center">
-          <div className="w-12 h-12 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center mx-auto">
-            <MessageSquare className="w-6 h-6 text-blue-400" />
-          </div>
-          <div className="space-y-2">
-            <h2 className="text-white font-bold text-lg">Add your OpenAI key to start chatting</h2>
-            <p className="text-gray-400 text-sm">
-              FlashFace connects directly to GPT-4o so you can chat about your portfolio in real time — no copy-pasting.
+      <div className="flex flex-col h-full">
+        <SetupPanel categories={categories} weights={weights} maxClv={maxClv} />
+        <div className="flex-1 flex items-center justify-center px-6">
+          <div className="max-w-md w-full bg-gray-950 border border-gray-800 rounded-2xl p-8 space-y-5 text-center">
+            <div className="w-12 h-12 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center mx-auto">
+              <MessageSquare className="w-6 h-6 text-blue-400" />
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-white font-bold text-lg">Add your OpenAI key for live chat</h2>
+              <p className="text-gray-400 text-sm">
+                Connects directly to GPT-4o with your full portfolio already in context — no copy-pasting.
+                Or use the <span className="text-gray-300">Custom GPT Setup</span> above with chatgpt.com.
+              </p>
+            </div>
+            <button
+              onClick={onGoToSettings}
+              className="flex items-center gap-2 mx-auto px-5 py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-semibold text-sm transition-colors"
+            >
+              <Settings2 className="w-4 h-4" />
+              Add OpenAI Key in Settings
+            </button>
+            <p className="text-xs text-gray-600">
+              Get a key at <span className="text-gray-400 font-mono">platform.openai.com/api-keys</span>
             </p>
           </div>
-          <button
-            onClick={onGoToSettings}
-            className="flex items-center gap-2 mx-auto px-5 py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-semibold text-sm transition-colors"
-          >
-            <Settings2 className="w-4 h-4" />
-            Add OpenAI Key in Settings
-          </button>
-          <p className="text-xs text-gray-600">
-            Get a key at <span className="text-gray-400 font-mono">platform.openai.com/api-keys</span>
-          </p>
         </div>
       </div>
     );
@@ -325,7 +578,10 @@ export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Pro
   return (
     <div className="flex flex-col h-full">
 
-      {/* Header */}
+      {/* Custom GPT setup panel — always accessible */}
+      <SetupPanel categories={categories} weights={weights} maxClv={maxClv} />
+
+      {/* Live chat header */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-gray-900 bg-[#050505]/80 shrink-0">
         <div className="flex items-center gap-2.5">
           <div className="w-7 h-7 rounded-lg bg-blue-600/20 border border-blue-500/30 flex items-center justify-center">
@@ -333,7 +589,7 @@ export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Pro
           </div>
           <span className="text-white font-semibold text-sm">FlashFace × GPT-4o</span>
           <span className="text-[10px] font-mono px-2 py-0.5 rounded border text-emerald-400 bg-emerald-500/10 border-emerald-500/20">
-            {categories.filter(c => c.status !== 'Killed').length} active categories in context
+            {categories.filter(c => c.status !== 'Killed').length} categories in context
           </span>
         </div>
         <button
@@ -375,7 +631,6 @@ export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Pro
           </div>
         )}
 
-        {/* Scroll to bottom */}
         {!atBottom && messages.length > 0 && (
           <div className="sticky bottom-4 flex justify-center">
             <button
@@ -433,7 +688,7 @@ export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Pro
           )}
         </div>
         <p className="text-center text-[10px] text-gray-700 mt-2">
-          GPT-4o · Your data is sent to OpenAI when you message · Conversations are not stored
+          GPT-4o · Data sent to OpenAI per message · Conversations not stored
         </p>
       </div>
     </div>
