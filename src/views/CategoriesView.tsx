@@ -38,6 +38,21 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
     return Math.min(100, Math.round((done / agents.length) * 100));
   };
 
+  /** Derived from persisted agentResults — survives page reload */
+  const getAiResearchStatus = (c: Category): 'none' | 'partial' | 'done' | 'error' => {
+    if (!c.agentResults) return 'none';
+    const keys = ['unitEconomics', 'marketDynamics', 'localCompetitors', 'globalCompetitors',
+      'legalLogistics', 'suppliersBudget', 'foundersAndTeam', 'adIntelligence',
+      'retentionEngineering', 'searchTrends'] as const;
+    const vals = keys.map(k => c.agentResults![k] ?? '');
+    const errors = vals.filter(v => v.startsWith('Error:'));
+    const filled = vals.filter(v => v && !v.startsWith('Error:'));
+    if (filled.length === 0 && errors.length === 0) return 'none';
+    if (filled.length === keys.length) return 'done';
+    if (errors.length > 0 && filled.length === 0) return 'error';
+    return 'partial';
+  };
+
   const categoriesWithScores = categories
     .map(c => ({
       ...c,
@@ -354,6 +369,19 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
                       {cat.status === 'Winner' && <Trophy className="w-3 h-3 mr-1" />}
                       {cat.status}
                     </span>
+                    {(() => {
+                      const ai = getAiResearchStatus(cat);
+                      if (ai === 'none') return null;
+                      return (
+                        <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[9px] uppercase font-bold tracking-wider ml-1',
+                          ai === 'done'    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                          ai === 'partial' ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' :
+                                            'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                        )} title={ai === 'done' ? 'All 10 AI agents completed' : ai === 'partial' ? 'Some agents completed, some failed or missing' : 'AI research failed'}>
+                          {ai === 'done' ? 'AI ✓' : ai === 'partial' ? 'AI ⚠' : 'AI ✗'}
+                        </span>
+                      );
+                    })()}
                     
                     <div className="flex gap-2 items-center w-full justify-end" onClick={e => e.stopPropagation()}>
                       {enhancingIds[cat.id] && (
@@ -509,6 +537,19 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
                               )}>
                                 {c.status}
                               </span>
+                              {(() => {
+                                const ai = getAiResearchStatus(c);
+                                if (ai === 'none') return null;
+                                return (
+                                  <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[9px] uppercase font-bold tracking-wider ml-1',
+                                    ai === 'done'    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                                    ai === 'partial' ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' :
+                                                      'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                  )} title={ai === 'done' ? 'All 10 AI agents completed' : ai === 'partial' ? 'Some agents completed, some failed or missing' : 'AI research failed'}>
+                                    {ai === 'done' ? 'AI ✓' : ai === 'partial' ? 'AI ⚠' : 'AI ✗'}
+                                  </span>
+                                );
+                              })()}
                             </td>
                             <td className="py-2 px-2 text-right">
                               <div className="flex items-center justify-end gap-2">

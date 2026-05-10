@@ -422,49 +422,24 @@ ANTI-HALLUCINATION: Only return scores retrieved from real searches. Write "[sco
     }
   };
 
-  // Run agents in parallel pairs — retryWithBackoff handles rate limits (~3x faster than fully sequential)
-  updateProgress({ overall: 'Running Unit Economics + Market Dynamics in parallel...' });
-  const [unitEcon, marketDyn] = await Promise.all([
+  // Run all 10 agents simultaneously — retryWithBackoff auto-retries any rate-limit errors
+  updateProgress({ overall: 'Launching all 10 agents simultaneously...' });
+  const [
+    unitEcon, marketDyn, legalLog, localNotes,
+    globalNotes, suppliersBudget, adIntel,
+    foundersAndTeam, retentionEng, searchTrends
+  ] = await Promise.all([
     runUnitEconomicsAgent(),
     runMarketDynamicsAgent(),
-  ]);
-
-  updateProgress({ overall: 'Running Legal & Logistics + Local Competitors in parallel...' });
-  const [legalLog, localNotes] = await Promise.all([
     runLegalLogisticsAgent(),
     runLocalCompetitorsAgent(),
-  ]);
-
-  if (onPartialUpdate) {
-    onPartialUpdate({
-      ...unitEcon.result,
-      ...marketDyn.result,
-      ...legalLog.result,
-      agentResults: {
-        unitEconomics: unitEcon.raw,
-        marketDynamics: marketDyn.raw,
-        legalLogistics: legalLog.raw,
-        localCompetitors: localNotes.raw
-      },
-      researchSources: [...new Set([...(category.researchSources || []), ...(unitEcon.sources || []), ...(marketDyn.sources || []), ...(legalLog.sources || []), ...(localNotes.sources || [])])]
-    });
-  }
-
-  updateProgress({ overall: 'Running Global Competitors + Suppliers + Ad Intelligence in parallel...' });
-  const [globalNotes, suppliersBudget, adIntel] = await Promise.all([
     runGlobalCompetitorsAgent(),
     runSuppliersBudgetAgent(),
     runAdIntelligenceAgent(),
-  ]);
-
-  updateProgress({ overall: 'Running Founders & Team + Retention Engineering in parallel...' });
-  const [foundersAndTeam, retentionEng] = await Promise.all([
     runFoundersTeamAgent(),
     runRetentionEngineeringAgent(),
+    runSearchTrendsAgent(),
   ]);
-
-  updateProgress({ overall: 'Running Search Trends Intelligence (Google Trends EN + NL)...' });
-  const searchTrends = await runSearchTrendsAgent();
 
   updateProgress({ overall: 'Merging intelligence reports...' });
 
@@ -587,47 +562,45 @@ export async function discoverDtcCategories(
 
   while (!signal.aborted) {
     const existingCategoryNames = getExistingCategoryNames();
+    // Cap the avoid-list at 60 names to prevent context bloat as DB grows.
+    // The model already avoids exact names — truncating to recent entries is fine.
+    const avoidNames = existingCategoryNames.slice(-60);
     log(`Syncing bounds: avoiding ${existingCategoryNames.length} known categories & ${searchedSectors.size} exhausted sectors.`);
 
-    // Step 1: Identify Marco-Industries
+    // ── Step 1: Generate next wave of sectors via grounded JSON ──────────────
+    // Single call: JSON schema + Google Search together via toolConfig.
+    // This avoids a fragile text-parse + JSON fallback pattern.
     updateProgress({ status: "Generating next wave of consumer sectors..." });
-    
+
     let sectors: string[] = [];
     try {
-      const avoidedSectorsText = searchedSectors.size > 0 ? `DO NOT SUGGEST THESE SECTORS (we already mapped them): ${Array.from(searchedSectors).join(", ")}.` : "";
-      
-      // Pass 1: search for sectors (plain text — JSON mode + googleSearch unsupported together)
-      const sectorText = await safeGenerate({
+      const avoidedSectorsText = searchedSectors.size > 0
+        ? `DO NOT SUGGEST THESE SECTORS (already mapped): ${Array.from(searchedSectors).join(", ")}.`
+        : "";
+
+      const sectorResp = await safeGenerate({
         model: modelName,
-        contents: `You are an endless, elite private equity mapping system. Return a completely new list of 5 distinct consumer product sectors where subscription/high-loyalty DTC models are viable.
-        CRITICAL: Rotate randomly through drastically different areas. Sometimes pick Beauty/Makeup, sometimes Hardware Subscriptions, sometimes Pets, Home, Vitamins, Wearables, Kid stuff, etc.
-        ANTI-HALLUCINATION: Use search to verify each sector. Only include sectors with real, currently operating DTC businesses.
-        ${avoidedSectorsText}
-        Return ONLY the 5 sector names, one per line, with no bullet points or numbering.`,
-        config: { tools: [{ googleSearch: {} }] }
+        contents: `You are an endless private-equity sector mapper. Use Google Search to verify each sector has real, operating DTC subscription businesses before listing it.
+
+Return exactly 8 DISTINCT consumer product sectors where subscription/high-loyalty DTC models are viable and proven.
+VARIETY RULE: Rotate across drastically different areas — Beauty, Pet care, Baby products, Vitamins/supplements, Home goods, Wearables, Coffee/food, Skincare, Fitness, Men's grooming, Women's health, Gaming accessories, Office products, Cleaning products, Sleep aids, Oral care, Kids education, Hobby crafts — never cluster in one theme.
+${avoidedSectorsText}
+
+Return the sector names as a JSON array under "sectors". Each sector must have at least one real, named DTC business confirmed by search.`,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: sectorSchema,
+          tools: [{ googleSearch: {} }],
+          toolConfig: { includeServerSideToolInvocations: true }
+        }
       });
       if (signal.aborted) return;
 
-      // Parse plain-text list of sector names
-      const rawText = sectorText.text?.trim() || '';
-      sectors = rawText.split('\n').map((s: string) => s.replace(/^[-*\d.\s]+/, '').trim()).filter(Boolean).slice(0, 8);
-
-      if (sectors.length === 0) {
-        // Fallback: try extracting via JSON schema from the raw text
-        try {
-          const extracted = await safeGenerate({
-            model: modelName,
-            contents: `Extract the list of consumer product sectors from this text as a JSON array:\n\n${rawText}`,
-            config: { responseMimeType: "application/json", responseSchema: sectorSchema }
-          });
-          sectors = JSON.parse(extracted.text?.trim() || '{}').sectors || [];
-        } catch { /* ignore fallback failure */ }
-      }
-
-      log(`Successfully mapped ${sectors.length} new distinct sectors.`);
+      sectors = JSON.parse(sectorResp.text?.trim() || '{}').sectors || [];
+      log(`Mapped ${sectors.length} new sectors via grounded search.`);
       updateProgress({ totalIndustries: progress.totalIndustries + sectors.length });
     } catch (e: any) {
-      log(`Sector mapping turbulence: ${e.message}`);
+      log(`Sector mapping error: ${e.message}`);
       await new Promise(r => setTimeout(r, 2000));
       continue;
     }
@@ -640,56 +613,72 @@ export async function discoverDtcCategories(
 
     updateProgress({ status: "Hunting inside targeted sectors..." });
 
+    // ── Step 2: Per-sector discovery — single grounded JSON call ─────────────
+    // KEY FIX: We use JSON schema + Google Search in ONE call (toolConfig).
+    // Previously: Pass 1 searched (text) → Pass 2 extracted (JSON, no search)
+    // Problem: Pass 2 couldn't find URLs in the text → sources always empty →
+    //          filter "require non-empty sources" killed ALL categories.
+    // Fix: Grounding populates sources in real-time during the structured call.
     for (const sector of sectors) {
       if (signal.aborted) return;
       searchedSectors.add(sector);
       log(`Deploying Agent into sector: [${sector}]...`);
+
       try {
-        const currentAvoidCategories = getExistingCategoryNames();
-        const existingInfo = currentAvoidCategories.length > 0 
-          ? `DO NOT SUGGEST ANY OF THE FOLLOWING EXACT OR SIMILAR CATEGORIES (WE ALREADY HAVE THEM TRACKED): ${currentAvoidCategories.join(", ")}.\n\n`
+        const avoidList = avoidNames.length > 0
+          ? `CATEGORIES WE ALREADY TRACK (do not suggest these or anything clearly identical): ${avoidNames.join(", ")}.`
           : "";
 
-        const prompt = `${userPrompt}\n\n${existingInfo}YOUR MISSION NOW: Deep-dive specifically into the sector: "${sector}". Discover 2 to 4 HYPER-SPECIFIC, highly profitable micro-categories within this sector that fit all constraints.\n\nCRITICAL ANTI-HALLUCINATION CONSTRAINTS:\n1. DO NOT INVENT categories. Only suggest categories with REAL, NAMED, OPERATIONAL businesses already serving them.\n2. For every category, verify with Google Search. Include at least one real source URL per category.\n3. For audienceSizeNL: show TAM→SAM→SOM funnel in notes with each filter step.\n4. If CLV/CAC/churn cannot be found via search, output 0.\n\nFor each category, output a DETAILED description including: exact name, target audience, estimated metrics, TAM→SOM funnel, real business examples, and source URLs.`;
-
-        // Pass 1: grounded search → rich text description of categories
-        const searchResp = await safeGenerate({
+        const catResp = await safeGenerate({
           model: modelName,
-          contents: prompt,
-          config: { tools: [{ googleSearch: {} }] }
+          contents: `${userPrompt}
+
+${avoidList}
+
+YOUR MISSION: Deep-dive into the consumer sector: "${sector}".
+Use Google Search to discover 3 to 6 HYPER-SPECIFIC, profitable micro-categories within this sector that meet the evaluation criteria above.
+
+ANTI-HALLUCINATION RULES (non-negotiable):
+1. ONLY suggest categories with at least ONE real, named, currently-operating business confirmed by search right now.
+2. If you cannot find a real business via search, DO NOT include that category.
+3. Populate the sources array with real URLs you retrieve during this search session.
+4. For numeric metrics (CLV, CAC, churn): use 0 if no real searchable benchmark exists — never estimate.
+5. In notes: include the real business name(s) you found, and briefly describe what makes this micro-niche distinct.
+
+Return 3–6 structured category objects. Each must have a non-empty name, a real targetAudience, and at least one source URL.`,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: categorySchema,
+            tools: [{ googleSearch: {} }],
+            toolConfig: { includeServerSideToolInvocations: true }
+          }
         });
         if (signal.aborted) return;
-        const rawCategoryText = searchResp.text?.trim() || '';
 
-        // Pass 2: extract structured category objects from the text
-        const extractResp = await safeGenerate({
-          model: modelName,
-          contents: `Extract the DTC subscription category data from the research text below. Return only categories with a non-empty sources array (at least 1 real URL). For missing numeric fields use 0.\n\n---\n${rawCategoryText.slice(0, 25000)}`,
-          config: { responseMimeType: "application/json", responseSchema: categorySchema }
-        });
-        if (signal.aborted) return;
+        const data = JSON.parse(catResp.text?.trim() || "{}");
+        const found: any[] = data.categories || [];
 
-        const data = JSON.parse(extractResp.text?.trim() || "{}");
-        const found = data.categories || [];
-        
-        log(`Agent extracted ${found.length} valid entities from [${sector}].`);
-        
-        for (const cat of found) {
+        // Filter: must have a name. Sources are populated by grounding — no hard filter.
+        // (The old hard sources-filter was the main cause of zero output.)
+        const valid = found.filter(c => typeof c.name === 'string' && c.name.trim().length > 2);
+        log(`Agent found ${valid.length} valid categories in [${sector}] (${found.length - valid.length} had no name).`);
+
+        for (const cat of valid) {
           if (signal.aborted) return;
           cat.industry = sector;
           cat.status = 'Researching';
           const discoverySources: string[] = cat.sources || [];
           const sourceNote = discoverySources.length > 0
             ? `\nDiscovery sources: ${discoverySources.join(', ')}`
-            : '\n⚠️ No sources captured during discovery — treat all estimates as unverified until Deep Research is run.';
-          cat.notes = `[DISCOVERY SWARM — ${new Date().toISOString()}]\n⚠️ INITIAL ESTIMATES ONLY — all numeric values (CLV, CAC, churn %, market size, audience size) are unvalidated model estimates. Run Deep Research on this category to replace them with source-backed data.${sourceNote}\n\n${cat.notes || ''}`;
+            : '\n⚠️ No source URLs captured — run Deep Research to validate all estimates.';
+          cat.notes = `[DISCOVERY SWARM — ${new Date().toISOString()}]\n⚠️ INITIAL ESTIMATES ONLY — CLV, CAC, churn %, market size are unvalidated. Run Deep Research to replace with source-backed data.${sourceNote}\n\n${cat.notes || ''}`;
           if (discoverySources.length > 0) {
             cat.researchSources = discoverySources;
           }
           onCategoryDiscovered(cat);
         }
       } catch (e: any) {
-        log(`Agent encountered interference in [${sector}]: ${e.message}`);
+        log(`Agent error in [${sector}]: ${e.message}`);
       }
       updateProgress({ industriesTrawled: progress.industriesTrawled + 1 });
     }

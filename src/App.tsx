@@ -305,7 +305,7 @@ export default function App() {
     const toResearch = categories.filter(c => c.status !== 'Killed' && !c.agentResults?.unitEconomics);
     if (toResearch.length === 0) return;
     const controller = initBulkResearch(toResearch);
-    processWithConcurrency(toResearch, 1, handleDeepSearch, controller.signal)
+    processWithConcurrency(toResearch, 2, handleDeepSearch, controller.signal)
       .finally(() => {
         setIsBulkResearching(false);
         bulkResearchAbortRef.current = null;
@@ -318,7 +318,7 @@ export default function App() {
     const toRefresh = categories.filter(c => c.status !== 'Killed' && hasIncompleteAgents(c));
     if (toRefresh.length === 0) { alert('No failed or incomplete agent results found.'); return; }
     const controller = initBulkResearch(toRefresh);
-    processWithConcurrency(toRefresh, 1, handleDeepSearch, controller.signal)
+    processWithConcurrency(toRefresh, 2, handleDeepSearch, controller.signal)
       .finally(() => {
         setIsBulkResearching(false);
         bulkResearchAbortRef.current = null;
@@ -331,7 +331,7 @@ export default function App() {
     const toRefresh = categories.filter(c => c.status !== 'Killed' && !!c.agentResults?.unitEconomics);
     if (toRefresh.length === 0) return;
     const controller = initBulkResearch(toRefresh);
-    processWithConcurrency(toRefresh, 1, handleDeepSearch, controller.signal)
+    processWithConcurrency(toRefresh, 2, handleDeepSearch, controller.signal)
       .finally(() => {
         setIsBulkResearching(false);
         bulkResearchAbortRef.current = null;
