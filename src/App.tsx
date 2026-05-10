@@ -57,32 +57,60 @@ export default function App() {
   const bulkResearchAbortRef = useRef<AbortController | null>(null);
   const bulkCallbackRef = useRef<((succeeded: boolean) => void) | null>(null);
   const categoriesRef = useRef(categories);
+  // Prevent writing seed/localStorage data back to the server file before the async
+  // load from server + IndexedDB has completed. Without this guard, a fresh browser
+  // session with an empty localStorage would race and overwrite the server file with
+  // INITIAL_CATEGORIES before loadBestCategories could read the real data.
+  const hasLoadedFromPersistenceRef = useRef(false);
 
   useEffect(() => {
     categoriesRef.current = categories;
 
+    // Don't persist until the initial async load is complete — avoids race where
+    // seed data overwrites server file / IndexedDB before real data is read.
+    if (!hasLoadedFromPersistenceRef.current) return;
+
     if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current);
     setSaveStatus('saving');
 
-    saveAllLayers(categories);
-
-    saveStatusTimerRef.current = setTimeout(() => setSaveStatus('saved'), 600);
-    const clearTimer = setTimeout(() => setSaveStatus('idle'), 4000);
-    return () => clearTimeout(clearTimer);
+    saveAllLayers(categories).then(({ api, idb }) => {
+      // Only show error if BOTH async layers fail — localStorage is always written
+      if (!api && !idb) {
+        setSaveStatus('error');
+        saveStatusTimerRef.current = setTimeout(() => setSaveStatus('idle'), 6000);
+      } else {
+        setSaveStatus('saved');
+        saveStatusTimerRef.current = setTimeout(() => setSaveStatus('idle'), 4000);
+      }
+    });
   }, [categories]);
 
-  // On mount: load from server file + IndexedDB (async). If either has more categories
-  // than what localStorage gave us on first render, upgrade immediately (no data loss).
+  // On mount: load the best persisted state from all 3 layers (epoch-merged).
+  // Must complete BEFORE we start writing back, to avoid overwriting real data
+  // with INITIAL_CATEGORIES from an empty localStorage.
   useEffect(() => {
     loadBestCategories().then(({ categories: best, source }) => {
       if (best.length > 0) {
+        // Always apply the merged result — it may differ from localStorage even
+        // with the same count (e.g. a research update landed in IDB/server but
+        // not in localStorage for this device).
         setCategories(prev => {
-          if (best.length > prev.length) {
-            console.info(`[Persistence] Loaded ${best.length} categories from ${source} (had ${prev.length} from localStorage)`);
+          const isDifferent = JSON.stringify(best.map(c => c.id + c.lastUpdated)) !==
+                              JSON.stringify(prev.map(c => c.id + c.lastUpdated));
+          if (isDifferent) {
+            console.info(`[Persistence] Hydrated from ${source}: ${best.length} categories`);
             return best;
           }
           return prev;
         });
+      }
+    }).finally(() => {
+      // Allow saves only once we know what the real persisted state is.
+      hasLoadedFromPersistenceRef.current = true;
+      // If nothing changed from initial state, still need to save INITIAL_CATEGORIES
+      // to all layers (first-ever run scenario where no layer had any data).
+      if (!lsLoadCategories().length) {
+        saveAllLayers(categoriesRef.current);
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -254,10 +282,10 @@ export default function App() {
     return Promise.all(workers).then(() => {});
   };
 
-  /** Returns true if the category has any agent results that failed or are missing */
+  /** Returns true if the category has any agent results that failed or are missing (all 9 agents) */
   const hasIncompleteAgents = (c: Category): boolean => {
     if (!c.agentResults) return false;
-    const keys = ['unitEconomics', 'marketDynamics', 'localCompetitors', 'globalCompetitors', 'legalLogistics', 'suppliersBudget', 'foundersAndTeam'] as const;
+    const keys = ['unitEconomics', 'marketDynamics', 'localCompetitors', 'globalCompetitors', 'legalLogistics', 'suppliersBudget', 'foundersAndTeam', 'adIntelligence', 'retentionEngineering'] as const;
     return keys.some(key => {
       const r = c.agentResults![key];
       return !r || r.startsWith('Error:');
@@ -578,12 +606,20 @@ export default function App() {
                 );
               })()}
               {/* Save status + category count indicator */}
-              <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-gray-900 border border-gray-800 rounded-lg text-xs font-mono">
+              <div
+                className={cn(
+                  "hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono border transition-colors",
+                  saveStatus === 'error'
+                    ? "bg-rose-500/10 border-rose-500/25"
+                    : "bg-gray-900 border-gray-800"
+                )}
+                title={saveStatus === 'error' ? 'Server + IndexedDB both failed to save. Data is safe in localStorage but close the tab carefully.' : undefined}
+              >
                 <Cloud className="w-3 h-3 text-gray-500" />
                 <span className="text-gray-400">{categories.length}</span>
                 {saveStatus === 'saving' && <Loader2 className="w-3 h-3 text-yellow-400 animate-spin" />}
                 {saveStatus === 'saved' && <CheckCircle2 className="w-3 h-3 text-emerald-400" />}
-                {saveStatus === 'error' && <AlertCircle className="w-3 h-3 text-rose-400" />}
+                {saveStatus === 'error' && <AlertCircle className="w-3 h-3 text-rose-400" aria-label="Save error — localStorage is still safe" />}
               </div>
 
               <div className="relative">
@@ -639,7 +675,7 @@ export default function App() {
             {currentView === 'export' && <ExportView categories={categories} />}
             {currentView === 'prompts' && <PromptsView />}
             {currentView === 'settings' && <SettingsView onRefreshSpending={() => setSpendingRefresh(v => v + 1)} />}
-            {currentView === 'chatgpt' && <ChatGPTView categories={categories} weights={weights} maxClv={maxClv} />}
+            {currentView === 'chatgpt' && <ChatGPTView categories={categories} weights={weights} maxClv={maxClv} onGoToSettings={() => setCurrentView('settings')} />}
             {currentView === 'edit' && (
               <EditCategoryView 
                 category={editingId ? categories.find(c => c.id === editingId) || null : null} 

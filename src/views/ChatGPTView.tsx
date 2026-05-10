@@ -1,87 +1,22 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Category, Weights } from '../types';
-import { calculateDecisionScore, calculateLtvCac, getMacroSector } from '../utils';
-import { cn } from '../utils';
-import { Copy, CheckCircle2, MessageSquare, Info, ChevronDown, ChevronUp } from 'lucide-react';
+import { calculateDecisionScore, calculateLtvCac, getMacroSector, cn } from '../utils';
+import { MessageSquare, Send, Square, Plus, Settings2, Loader2, User, Bot, ChevronDown } from 'lucide-react';
+import { getOpenAiApiKey } from '../lib/settings';
 
 interface Props {
   categories: Category[];
   weights: Weights;
   maxClv: number;
+  onGoToSettings?: () => void;
 }
 
-/** Markdown snapshot of all categories for pasting into a ChatGPT session. */
-function buildSessionData(categories: Category[], weights: Weights, maxClv: number): string {
-  const now = new Date().toLocaleString('nl-NL', { timeZone: 'Europe/Amsterdam' });
-
-  const header = `# FlashFace OS — Session Data Export
-Generated: ${now}
-Active categories: ${categories.filter(c => c.status !== 'Killed').length} | Total: ${categories.length}
-Winner count: ${categories.filter(c => c.status === 'Winner').length} | Shortlisted: ${categories.filter(c => c.status === 'Shortlisted').length} | Researching: ${categories.filter(c => c.status === 'Researching').length} | Killed: ${categories.filter(c => c.status === 'Killed').length}
-
-## Score Weights (current session)
-CLV ${weights.clv} | Retention ${weights.retention} | Acquisition ${weights.acquisition} | Market Size ${weights.marketSize} | Loyalty ${weights.loyalty} | Story Depth ${weights.storyDepth} | Micro-Niche ${weights.microNiche}
-
----
-`;
-
-  const rows = [...categories]
-    .sort((a, b) => calculateDecisionScore(b, weights, maxClv) - calculateDecisionScore(a, weights, maxClv))
-    .map(c => {
-      const score = calculateDecisionScore(c, weights, maxClv);
-      const ltvCac = calculateLtvCac(c.estimatedCLV, c.estimatedCAC);
-      const sector = getMacroSector(c.industry);
-
-      const lines: string[] = [
-        `## ${c.name} [${c.status.toUpperCase()}] — Score: ${score}/100`,
-        `**Sector:** ${sector}${c.industry ? ` (${c.industry})` : ''}`,
-        `**Key Metrics:** CLV €${c.estimatedCLV} | CAC €${c.estimatedCAC} | LTV:CAC ${ltvCac}x | Monthly Churn ${c.monthlyChurnPercent}%${c.cagr ? ` | CAGR ${c.cagr}` : ''}`,
-        `**Market:** Size Score ${c.marketSizeScore}/100 | Acq. Difficulty ${c.acquisitionDifficulty} | Emotional Loyalty ${c.emotionalLoyalty}`,
-        `**Positioning:** Brand ${c.brandType} | Story Depth ${c.storyDepth}/10 | Micro-Niche ${c.microNichePotential}/10 | Awareness ${c.awarenessLevel}`,
-      ];
-
-      if (c.tamNL || c.samNL || c.somNL) {
-        lines.push(`**NL Funnel:** TAM ${c.tamNL?.toLocaleString() ?? '?'} | SAM ${c.samNL?.toLocaleString() ?? '?'} | SOM ${c.somNL?.toLocaleString() ?? '?'}`);
-      }
-      if (c.funnelBreakdownNL) {
-        lines.push(`**Funnel Logic:** ${c.funnelBreakdownNL.slice(0, 300)}${c.funnelBreakdownNL.length > 300 ? '…' : ''}`);
-      }
-      if (c.targetAudience) lines.push(`**Target Audience:** ${c.targetAudience}`);
-      if (c.marketSizeNL) lines.push(`**NL Market:** ${c.marketSizeNL}`);
-      if (c.marketSizeGlobal) lines.push(`**Global Market:** ${c.marketSizeGlobal}`);
-      if (c.legalAndAdRestrictions) lines.push(`**Legal/Ad Restrictions:** ${c.legalAndAdRestrictions}`);
-      if (c.regulatoryRiskNL) lines.push(`**Regulatory Risk NL:** ${c.regulatoryRiskNL}`);
-      if (c.realMonthlyConsumption) lines.push(`**Monthly Consumption:** Yes — ${c.monthlyConsumptionReason}`);
-      if (c.notionIdea) lines.push(`**Idea Context:** ${c.notionIdea.slice(0, 200)}${c.notionIdea.length > 200 ? '…' : ''}`);
-      if (c.notes) lines.push(`**Notes:** ${c.notes.slice(0, 300)}${c.notes.length > 300 ? '…' : ''}`);
-
-      // AI research summaries (first 400 chars of each)
-      const agents = c.agentResults ?? {};
-      const agentLabels: Array<[keyof typeof agents, string]> = [
-        ['unitEconomics', 'Unit Economics'],
-        ['marketDynamics', 'Market Dynamics'],
-        ['localCompetitors', 'Local Competitors (NL)'],
-        ['globalCompetitors', 'Global Competitors'],
-        ['legalLogistics', 'Legal & Logistics'],
-        ['suppliersBudget', 'Suppliers & Budget'],
-        ['foundersAndTeam', 'Founders & Team'],
-        ['adIntelligence', 'Ad Intelligence'],
-        ['retentionEngineering', 'Retention Engineering'],
-      ];
-      for (const [key, label] of agentLabels) {
-        const val = agents[key];
-        if (val) {
-          lines.push(`**${label}:** ${val.slice(0, 400)}${val.length > 400 ? '…' : ''}`);
-        }
-      }
-
-      return lines.join('\n');
-    });
-
-  return header + rows.join('\n\n---\n\n');
+interface Message {
+  role: 'user' | 'assistant';
+  content: string;
+  streaming?: boolean;
 }
 
-/** The one-time system prompt explaining FlashFace OS to ChatGPT. */
 const SYSTEM_PROMPT = `You are a strategic advisor for FlashFace OS, a Dutch DTC (Direct-to-Consumer) category scouting and decision platform. Your job is to help the operator evaluate, compare, and improve their portfolio of business categories.
 
 ## What FlashFace OS does
@@ -89,264 +24,417 @@ FlashFace OS researches, scores, and ranks potential DTC subscription-first cate
 
 ## Scoring Formula
 Each category receives a Decision Score (0–100) based on a weighted combination of 7 factors:
+1. CLV Score = (estimatedCLV / highest CLV in portfolio) × 100
+2. Retention Score = 100 − monthlyChurnPercent
+3. Acquisition Score: Easy=100, Medium=60, Hard=30
+4. Market Size Score = manual 0–100 rating
+5. Loyalty Score: High=100, Medium=60, Low=30
+6. Story Depth = storyDepth (0–10) × 10
+7. Micro-Niche = microNichePotential (0–10) × 10
+Final score ×1.05 if brandType is "Solution-based".
 
-1. **CLV Score** = (estimatedCLV / highest CLV in portfolio) × 100 — relative value of lifetime revenue
-2. **Retention Score** = 100 − monthlyChurnPercent — lower churn = higher score
-3. **Acquisition Score**: Easy=100, Medium=60, Hard=30 — how hard it is to get customers
-4. **Market Size Score** = manual 0–100 rating of addressable NL + EU opportunity
-5. **Loyalty Score**: High=100, Medium=60, Low=30 — emotional/repeat connection
-6. **Story Depth** = storyDepth (0–10) × 10 — brand narrative richness
-7. **Micro-Niche** = microNichePotential (0–10) × 10 — specificity of the niche
-
-Each factor is multiplied by its weight (shown per session). Final score is further multiplied by 1.05 if the brand type is "Solution-based" (vs "Aesthetic-Pleasure").
-
-## Key Fields Explained
-- **estimatedCLV**: Predicted lifetime revenue per customer in €
-- **estimatedCAC**: Cost to acquire one customer in €
-- **monthlyChurnPercent**: % of customers who cancel/leave per month
-- **LTV:CAC**: CLV ÷ CAC — a ratio above 3× is healthy; below 1× is unsustainable
-- **CAGR**: Compound Annual Growth Rate of the category market
-- **tamNL / samNL / somNL**: Total Addressable / Serviceable Addressable / Serviceable Obtainable Market in the Netherlands (number of target entities)
-- **funnelBreakdownNL**: Step-by-step logic explaining how TAM → SAM → SOM was calculated
-- **marketSizeScore**: Manual 0–100 rating combining NL size, EU size, and growth trajectory
-- **acquisitionDifficulty**: How hard it is to acquire customers (Easy / Medium / Hard)
-- **emotionalLoyalty**: How emotionally attached customers are (Low / Medium / High)
-- **brandType**: "Solution-based" (solves a real pain) vs "Aesthetic-Pleasure" (desire-driven)
-- **awarenessLevel**: Where the target audience is on the awareness spectrum (Unaware → Problem-aware → Solution-aware → Product-aware)
-- **storyDepth (0–10)**: How rich, differentiated, and communicable the brand story is
-- **microNichePotential (0–10)**: How specifically targeted and defensible the niche is
-- **status**: Researching = early stage | Shortlisted = strong candidate | Winner = selected to build | Killed = rejected
-- **realMonthlyConsumption**: Whether the product is genuinely consumed monthly (critical for subscription model)
-- **notionIdea**: The original idea note from the operator
-- **agentResults**: AI-generated research from 9 specialist agents (unitEconomics, marketDynamics, localCompetitors, globalCompetitors, legalLogistics, suppliersBudget, foundersAndTeam, adIntelligence, retentionEngineering)
-- **CLV = €0**: Means AI research hasn't been completed yet — treat as unscored
+## Key Fields
+- estimatedCLV: Lifetime revenue per customer (€)
+- estimatedCAC: Cost to acquire one customer (€)
+- monthlyChurnPercent: % who cancel per month
+- LTV:CAC = CLV ÷ CAC. Below 2× is risky, above 3× is healthy
+- CAGR: Market compound annual growth rate
+- tamNL/samNL/somNL: Total/Serviceable/Obtainable market count in Netherlands
+- marketSizeScore: Manual 0–100 rating of NL + EU + growth opportunity
+- acquisitionDifficulty: Easy / Medium / Hard
+- emotionalLoyalty: Low / Medium / High
+- brandType: Solution-based (pain-solving) or Aesthetic-Pleasure (desire-driven)
+- awarenessLevel: Unaware → Problem-aware → Solution-aware → Product-aware
+- storyDepth (0–10): Brand narrative richness and differentiation
+- microNichePotential (0–10): Specificity and defensibility of niche
+- status: Researching → Shortlisted → Winner (or Killed)
+- realMonthlyConsumption: Whether product is genuinely consumed monthly (key for subscriptions)
+- CLV=€0 means AI research not yet completed — treat as unscored
 
 ## NL Market Context
-The operator is based in the Netherlands. All "local" competitor analysis is Dutch-market focused. SAM/SOM calculations use Dutch population (17.9M), household count (~8M), e-commerce penetration rates, and Dutch consumer behaviour research. Dutch regulatory environment (ACM, NVWA, GDPR) applies to legal risk.
+Operator is based in Netherlands (17.9M population, ~8M households). Dutch regulatory environment (ACM, NVWA, GDPR). All local competitor analysis is NL-focused.
 
 ## Category Status Logic
-- **Killed** categories were consciously rejected — do not recommend reviving them unless asked
-- **Winner** categories are committed — focus suggestions on execution, not re-evaluation
-- **Shortlisted** categories are the prime candidates for comparison and decision-making
-- **Researching** categories need the most gap analysis and benchmarking
+- Killed: consciously rejected — do not recommend reviving unless asked
+- Winner: committed — focus on execution
+- Shortlisted: prime candidates for comparison
+- Researching: needs gap analysis
 
-## How to help the operator
-When you receive FlashFace session data, immediately:
-1. Summarise the top 3 opportunities by Decision Score with a one-line verdict for each
-2. Flag any categories with LTV:CAC < 2× as financial risk
-3. Note any categories with missing CLV (€0) that need AI research
+## How to help
+When you receive live portfolio data, immediately:
+1. Summarise top 3 opportunities by Decision Score with a one-line verdict
+2. Flag categories with LTV:CAC < 2× as financial risk
+3. Note any categories with missing CLV (€0) needing research
 4. Then wait for specific questions
 
-You excel at:
-- **Ranking & comparison**: "Which category should I prioritise and why?"
-- **Gap analysis**: "What's missing from my research on [category]?"
-- **Financial modelling**: "What CLV do I need to hit a 3× LTV:CAC with this CAC?"
-- **Ad creative strategy**: Leveraging adIntelligence research to suggest angles
-- **Retention tactics**: Using retentionEngineering data for subscription economics
-- **Challenge mode**: Steelmanning why a high-scoring category might still fail
-- **New ideas**: Suggesting adjacent niches given the operator's winning criteria
-- **Go/No-Go decisions**: Summarising evidence for promoting to Winner or Killing`;
+You excel at: ranking & comparison, gap analysis, financial modelling, ad creative strategy, retention tactics, challenge mode (steelmanning why a winner could fail), adjacent niche discovery, and go/no-go decisions.`;
 
-function CopyButton({ text, label }: { text: string; label: string }) {
-  const [copied, setCopied] = useState(false);
+function buildSessionData(categories: Category[], weights: Weights, maxClv: number): string {
+  const now = new Date().toLocaleString('nl-NL', { timeZone: 'Europe/Amsterdam' });
+  const header = `# FlashFace OS — Live Portfolio Data\nGenerated: ${now}\nActive: ${categories.filter(c => c.status !== 'Killed').length} | Total: ${categories.length} | Winners: ${categories.filter(c => c.status === 'Winner').length} | Shortlisted: ${categories.filter(c => c.status === 'Shortlisted').length} | Killed: ${categories.filter(c => c.status === 'Killed').length}\n\nScore Weights: CLV ${weights.clv} | Retention ${weights.retention} | Acquisition ${weights.acquisition} | Market Size ${weights.marketSize} | Loyalty ${weights.loyalty} | Story Depth ${weights.storyDepth} | Micro-Niche ${weights.microNiche}\n\n---\n`;
 
-  const handleCopy = async () => {
+  const rows = [...categories]
+    .sort((a, b) => calculateDecisionScore(b, weights, maxClv) - calculateDecisionScore(a, weights, maxClv))
+    .map(c => {
+      const score = calculateDecisionScore(c, weights, maxClv);
+      const ltvCac = calculateLtvCac(c.estimatedCLV, c.estimatedCAC);
+      const sector = getMacroSector(c.industry);
+      const lines = [
+        `## ${c.name} [${c.status.toUpperCase()}] Score:${score}/100`,
+        `Sector: ${sector}${c.industry ? ` (${c.industry})` : ''} | CLV €${c.estimatedCLV} | CAC €${c.estimatedCAC} | LTV:CAC ${ltvCac}x | Churn ${c.monthlyChurnPercent}%${c.cagr ? ` | CAGR ${c.cagr}` : ''}`,
+        `Market Score:${c.marketSizeScore}/100 | Acq:${c.acquisitionDifficulty} | Loyalty:${c.emotionalLoyalty} | Brand:${c.brandType} | Story:${c.storyDepth}/10 | Niche:${c.microNichePotential}/10 | Awareness:${c.awarenessLevel}`,
+      ];
+      if (c.tamNL || c.samNL || c.somNL) lines.push(`NL Funnel: TAM ${c.tamNL?.toLocaleString() ?? '?'} | SAM ${c.samNL?.toLocaleString() ?? '?'} | SOM ${c.somNL?.toLocaleString() ?? '?'}`);
+      if (c.targetAudience) lines.push(`Audience: ${c.targetAudience}`);
+      if (c.marketSizeNL) lines.push(`NL Market: ${c.marketSizeNL}`);
+      if (c.notes) lines.push(`Notes: ${c.notes.slice(0, 200)}`);
+      const agents = c.agentResults ?? {};
+      const agentKeys: Array<[keyof typeof agents, string]> = [
+        ['unitEconomics', 'Unit Econ'], ['marketDynamics', 'Market Dyn'], ['localCompetitors', 'Local Comp'],
+        ['globalCompetitors', 'Global Comp'], ['legalLogistics', 'Legal'], ['suppliersBudget', 'Suppliers'],
+        ['foundersAndTeam', 'Founders'], ['adIntelligence', 'Ads'], ['retentionEngineering', 'Retention'],
+      ];
+      for (const [key, label] of agentKeys) {
+        const val = agents[key];
+        if (val) lines.push(`${label}: ${val.slice(0, 350)}${val.length > 350 ? '…' : ''}`);
+      }
+      return lines.join('\n');
+    });
+
+  return header + rows.join('\n\n---\n\n');
+}
+
+const STARTERS = [
+  'What are my top 3 opportunities right now?',
+  'Which categories have LTV:CAC below 2× (financial risk)?',
+  'Compare my Shortlisted categories and recommend one.',
+  'Challenge my highest-scoring category — why might it fail?',
+  'What adjacent niches should I explore given my winning criteria?',
+];
+
+function MessageBubble({ msg }: { msg: Message }) {
+  const isUser = msg.role === 'user';
+  return (
+    <div className={cn('flex items-start gap-3 px-4 py-3', isUser ? 'flex-row-reverse' : 'flex-row')}>
+      <div className={cn(
+        'flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center mt-0.5',
+        isUser ? 'bg-orange-600/30 border border-orange-500/40' : 'bg-gray-800 border border-gray-700'
+      )}>
+        {isUser ? <User className="w-3.5 h-3.5 text-orange-400" /> : <Bot className="w-3.5 h-3.5 text-gray-400" />}
+      </div>
+      <div className={cn(
+        'max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed',
+        isUser
+          ? 'bg-orange-600/15 border border-orange-500/20 text-orange-50 rounded-tr-sm'
+          : 'bg-gray-900 border border-gray-800 text-gray-200 rounded-tl-sm'
+      )}>
+        {msg.streaming && !msg.content ? (
+          <div className="flex items-center gap-1.5 py-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+            <span className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+            <span className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+          </div>
+        ) : (
+          <pre className="whitespace-pre-wrap font-sans">{msg.content}</pre>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Props) {
+  const apiKey = getOpenAiApiKey();
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [atBottom, setAtBottom] = useState(true);
+
+  useEffect(() => {
+    if (atBottom) messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, atBottom]);
+
+  const handleScroll = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    setAtBottom(el.scrollTop + el.clientHeight >= el.scrollHeight - 40);
+  };
+
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
+
+  const buildSystemContent = useCallback(() => {
+    return `${SYSTEM_PROMPT}\n\n---\n\n${buildSessionData(categories, weights, maxClv)}`;
+  }, [categories, weights, maxClv]);
+
+  const sendMessage = useCallback(async (userText: string) => {
+    const text = userText.trim();
+    if (!text || isStreaming || !apiKey) return;
+
+    setError(null);
+    const userMsg: Message = { role: 'user', content: text };
+    const history = [...messages, userMsg];
+    setMessages([...history, { role: 'assistant', content: '', streaming: true }]);
+    setInput('');
+    setIsStreaming(true);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
-    } catch {
-      // Fallback for older browsers
-      const el = document.createElement('textarea');
-      el.value = text;
-      document.body.appendChild(el);
-      el.select();
-      document.execCommand('copy');
-      document.body.removeChild(el);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o',
+          stream: true,
+          max_tokens: 2048,
+          temperature: 0.7,
+          messages: [
+            { role: 'system', content: buildSystemContent() },
+            ...history.map(m => ({ role: m.role, content: m.content })),
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({})) as { error?: { message?: string } };
+        throw new Error(errData.error?.message ?? `OpenAI API error ${response.status}`);
+      }
+
+      if (!response.body) throw new Error('No response body');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullContent = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed === 'data: [DONE]') continue;
+          if (trimmed.startsWith('data: ')) {
+            try {
+              const json = JSON.parse(trimmed.slice(6)) as { choices?: Array<{ delta?: { content?: string } }> };
+              const delta = json.choices?.[0]?.delta?.content ?? '';
+              if (delta) {
+                fullContent += delta;
+                setMessages(prev => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  if (last?.role === 'assistant') next[next.length - 1] = { ...last, content: fullContent };
+                  return next;
+                });
+              }
+            } catch { /* skip malformed SSE chunk */ }
+          }
+        }
+      }
+
+      setMessages(prev => {
+        const next = [...prev];
+        if (next[next.length - 1]?.role === 'assistant') {
+          next[next.length - 1] = { role: 'assistant', content: fullContent };
+        }
+        return next;
+      });
+
+    } catch (err) {
+      const e = err as Error;
+      if (e.name === 'AbortError') {
+        setMessages(prev => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === 'assistant' && last.streaming) {
+            next[next.length - 1] = { role: 'assistant', content: last.content || '_(stopped)_' };
+          }
+          return next;
+        });
+      } else {
+        setError(e.message);
+        setMessages(prev => prev.filter(m => !m.streaming));
+      }
+    } finally {
+      setIsStreaming(false);
+      abortRef.current = null;
+      setTimeout(() => textareaRef.current?.focus(), 50);
+    }
+  }, [messages, isStreaming, apiKey, buildSystemContent]);
+
+  const handleNewConversation = () => {
+    abortRef.current?.abort();
+    setMessages([]);
+    setError(null);
+    setInput('');
+    setTimeout(() => textareaRef.current?.focus(), 50);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage(input);
     }
   };
 
-  return (
-    <button
-      onClick={handleCopy}
-      className={cn(
-        'flex items-center gap-2 px-5 py-3 rounded-xl font-semibold text-sm transition-all duration-200',
-        copied
-          ? 'bg-emerald-600/20 border border-emerald-500/50 text-emerald-400'
-          : 'bg-orange-600 hover:bg-orange-500 border border-orange-500 text-white shadow-[0_0_20px_-5px_rgba(234,88,12,0.5)]'
-      )}
-    >
-      {copied ? <CheckCircle2 className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-      {copied ? 'Copied!' : label}
-    </button>
-  );
-}
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value);
+    e.target.style.height = 'auto';
+    e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
+  };
 
-function Step({
-  number,
-  title,
-  description,
-  children,
-}: {
-  number: string;
-  title: string;
-  description: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="bg-gray-950 border border-gray-800 rounded-2xl p-6 space-y-4">
-      <div className="flex items-start gap-4">
-        <div className="w-9 h-9 rounded-full bg-orange-600/20 border border-orange-500/40 flex items-center justify-center text-orange-400 font-bold text-sm shrink-0">
-          {number}
-        </div>
-        <div>
-          <h3 className="text-white font-semibold text-base">{title}</h3>
-          <p className="text-gray-400 text-sm mt-1">{description}</p>
-        </div>
-      </div>
-      <div className="pl-13">{children}</div>
-    </div>
-  );
-}
-
-function ExampleQuestions() {
-  const [open, setOpen] = useState(false);
-  const examples = [
-    'Here is my FlashFace data. What are my top 3 opportunities right now?',
-    'Which categories have the best LTV:CAC ratio and why are they strong?',
-    'Challenge me on my highest-scoring category — why might it still fail?',
-    'What\'s missing from my research on [category name]?',
-    'Which of my Shortlisted categories should I kill and why?',
-    'Given my winning criteria, what adjacent niches should I explore?',
-    'For [category], what ad channels and creative angles would work in the Netherlands?',
-    'Model the unit economics for [category] if CAC rises to €150 — still viable?',
-    'Compare [category A] vs [category B] and recommend one.',
-    'Summarise the retention risk across my portfolio.',
-    'What would it take for [Killed category] to be worth revisiting?',
-  ];
-
-  return (
-    <div className="bg-gray-950 border border-gray-800 rounded-2xl overflow-hidden">
-      <button
-        onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center justify-between p-5 text-left hover:bg-gray-900/50 transition-colors"
-      >
-        <div className="flex items-center gap-3">
-          <Info className="w-5 h-5 text-orange-400 shrink-0" />
-          <span className="text-white font-semibold text-sm">Example questions to ask ChatGPT</span>
-        </div>
-        {open ? <ChevronUp className="w-4 h-4 text-gray-500" /> : <ChevronDown className="w-4 h-4 text-gray-500" />}
-      </button>
-      {open && (
-        <div className="border-t border-gray-800 px-5 pb-5 pt-4 space-y-2">
-          {examples.map((q, i) => (
-            <div key={i} className="flex items-start gap-3 text-sm text-gray-300">
-              <span className="text-orange-500 font-mono shrink-0 mt-px">→</span>
-              <span>{q}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function ChatGPTView({ categories, weights, maxClv }: Props) {
-  const sessionData = buildSessionData(categories, weights, maxClv);
-  const activeCount = categories.filter(c => c.status !== 'Killed').length;
-
-  return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-6 py-10 space-y-6">
-
-        {/* Header */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-orange-600/20 border border-orange-500/30 flex items-center justify-center">
-              <MessageSquare className="w-5 h-5 text-orange-400" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-white">ChatGPT Integration</h1>
-              <p className="text-gray-400 text-sm">Link your personal ChatGPT to your FlashFace data</p>
-            </div>
+  if (!apiKey) {
+    return (
+      <div className="h-full flex items-center justify-center px-6">
+        <div className="max-w-md w-full bg-gray-950 border border-gray-800 rounded-2xl p-8 space-y-5 text-center">
+          <div className="w-12 h-12 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center mx-auto">
+            <MessageSquare className="w-6 h-6 text-blue-400" />
           </div>
-          <p className="text-gray-500 text-sm pt-1">
-            Two-step setup: teach ChatGPT about FlashFace once, then paste your live data at the start of each session.
+          <div className="space-y-2">
+            <h2 className="text-white font-bold text-lg">Add your OpenAI key to start chatting</h2>
+            <p className="text-gray-400 text-sm">
+              FlashFace connects directly to GPT-4o so you can chat about your portfolio in real time — no copy-pasting.
+            </p>
+          </div>
+          <button
+            onClick={onGoToSettings}
+            className="flex items-center gap-2 mx-auto px-5 py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-semibold text-sm transition-colors"
+          >
+            <Settings2 className="w-4 h-4" />
+            Add OpenAI Key in Settings
+          </button>
+          <p className="text-xs text-gray-600">
+            Get a key at <span className="text-gray-400 font-mono">platform.openai.com/api-keys</span>
           </p>
         </div>
+      </div>
+    );
+  }
 
-        {/* Step 1 */}
-        <Step
-          number="1"
-          title="One-time setup — Configure your GPT"
-          description="Copy the system prompt below and paste it into your ChatGPT custom instructions or a GPT you own. You only do this once."
+  return (
+    <div className="flex flex-col h-full">
+
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-3 border-b border-gray-900 bg-[#050505]/80 shrink-0">
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg bg-blue-600/20 border border-blue-500/30 flex items-center justify-center">
+            <MessageSquare className="w-3.5 h-3.5 text-blue-400" />
+          </div>
+          <span className="text-white font-semibold text-sm">FlashFace × GPT-4o</span>
+          <span className="text-[10px] font-mono px-2 py-0.5 rounded border text-emerald-400 bg-emerald-500/10 border-emerald-500/20">
+            {categories.filter(c => c.status !== 'Killed').length} active categories in context
+          </span>
+        </div>
+        <button
+          onClick={handleNewConversation}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-900 hover:bg-gray-800 border border-gray-800 text-gray-400 hover:text-white rounded-lg text-xs font-medium transition-colors"
         >
-          <div className="space-y-4">
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 max-h-48 overflow-y-auto">
-              <pre className="text-xs text-gray-400 whitespace-pre-wrap font-mono leading-relaxed">
-                {SYSTEM_PROMPT.slice(0, 600)}…
-              </pre>
-            </div>
-            <div className="space-y-2">
-              <CopyButton text={SYSTEM_PROMPT} label="Copy System Prompt" />
-              <p className="text-xs text-gray-600">
-                Paste into: <span className="text-gray-400">ChatGPT → Settings → Personalisation → Custom Instructions</span>
-                , or into a custom GPT's Instructions field.
-              </p>
+          <Plus className="w-3.5 h-3.5" />
+          New chat
+        </button>
+      </div>
+
+      {/* Messages */}
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto py-2 relative"
+      >
+        {messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full px-6 space-y-6">
+            <p className="text-gray-500 text-sm">Your full portfolio is loaded. Ask anything.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-xl w-full">
+              {STARTERS.map(s => (
+                <button
+                  key={s}
+                  onClick={() => sendMessage(s)}
+                  className="text-left px-4 py-3 bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-gray-700 rounded-xl text-xs text-gray-300 hover:text-white transition-all"
+                >
+                  {s}
+                </button>
+              ))}
             </div>
           </div>
-        </Step>
-
-        {/* Step 2 */}
-        <Step
-          number="2"
-          title="Each session — Paste your live data"
-          description={`Copy your current portfolio snapshot (${activeCount} active categories, ${categories.length} total) and paste it at the start of your ChatGPT conversation.`}
-        >
-          <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-3">
-              <div className="bg-gray-900 border border-gray-800 rounded-lg p-3 text-center">
-                <p className="text-2xl font-bold text-orange-400">{categories.filter(c => c.status === 'Winner').length}</p>
-                <p className="text-xs text-gray-500 mt-1">Winners</p>
-              </div>
-              <div className="bg-gray-900 border border-gray-800 rounded-lg p-3 text-center">
-                <p className="text-2xl font-bold text-blue-400">{categories.filter(c => c.status === 'Shortlisted').length}</p>
-                <p className="text-xs text-gray-500 mt-1">Shortlisted</p>
-              </div>
-              <div className="bg-gray-900 border border-gray-800 rounded-lg p-3 text-center">
-                <p className="text-2xl font-bold text-gray-400">{categories.filter(c => c.status === 'Killed').length}</p>
-                <p className="text-xs text-gray-500 mt-1">Killed</p>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <CopyButton text={sessionData} label={`Copy Session Data (${categories.length} categories)`} />
-              <p className="text-xs text-gray-600">
-                Includes all fields: scores, CLV, CAC, churn, LTV:CAC, market data, AI research summaries — everything ChatGPT needs to reason about your portfolio.
-              </p>
-            </div>
+        ) : (
+          <div className="max-w-3xl mx-auto">
+            {messages.map((msg, i) => (
+              <MessageBubble key={i} msg={msg} />
+            ))}
+            <div ref={messagesEndRef} className="h-4" />
           </div>
-        </Step>
+        )}
 
-        {/* Step 3 — Examples */}
-        <div className="space-y-3">
-          <h3 className="text-gray-300 font-semibold text-sm px-1">What to ask</h3>
-          <ExampleQuestions />
+        {/* Scroll to bottom */}
+        {!atBottom && messages.length > 0 && (
+          <div className="sticky bottom-4 flex justify-center">
+            <button
+              onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
+              className="p-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-full text-gray-400 hover:text-white shadow-lg transition-colors"
+            >
+              <ChevronDown className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="mx-4 mb-2 px-4 py-2.5 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-300 flex items-center gap-2">
+          <span className="text-rose-400">⚠</span>
+          {error}
+          <button onClick={() => setError(null)} className="ml-auto text-rose-500 hover:text-rose-300">✕</button>
         </div>
+      )}
 
-        {/* Tips */}
-        <div className="bg-blue-950/20 border border-blue-800/30 rounded-xl p-4 space-y-2">
-          <p className="text-blue-300 font-semibold text-sm">Pro tips</p>
-          <ul className="text-xs text-blue-200/70 space-y-1.5">
-            <li>• Paste session data fresh each time — your scores and research evolve</li>
-            <li>• ChatGPT with the system prompt will immediately summarise your top opportunities when you paste data</li>
-            <li>• Use GPT-4o for best results — it handles the full context window (100K+ tokens)</li>
-            <li>• Ask it to "challenge" a category for the most honest strategic feedback</li>
-            <li>• For deep dives, paste the full AI research tab content for a single category</li>
-          </ul>
+      {/* Input bar */}
+      <div className="shrink-0 border-t border-gray-900 bg-[#050505]/80 px-4 py-3">
+        <div className="max-w-3xl mx-auto flex items-end gap-3">
+          <div className="flex-1 bg-gray-900 border border-gray-800 focus-within:border-orange-500/50 rounded-2xl px-4 py-3 transition-colors">
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              value={input}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask about your portfolio… (Enter to send, Shift+Enter for newline)"
+              disabled={isStreaming}
+              className="w-full bg-transparent text-white text-sm resize-none focus:outline-none placeholder-gray-600 leading-relaxed disabled:opacity-50"
+              style={{ minHeight: '24px', maxHeight: '160px' }}
+            />
+          </div>
+          {isStreaming ? (
+            <button
+              onClick={() => abortRef.current?.abort()}
+              className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 rounded-xl text-rose-400 hover:text-rose-300 transition-colors"
+              title="Stop"
+            >
+              <Square className="w-4 h-4 fill-current" />
+            </button>
+          ) : (
+            <button
+              onClick={() => sendMessage(input)}
+              disabled={!input.trim()}
+              className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-orange-600 hover:bg-orange-500 disabled:bg-gray-800 disabled:text-gray-600 border border-orange-500 disabled:border-gray-700 rounded-xl text-white transition-colors shadow-[0_0_15px_-5px_rgba(234,88,12,0.5)] disabled:shadow-none"
+              title="Send (Enter)"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          )}
         </div>
-
+        <p className="text-center text-[10px] text-gray-700 mt-2">
+          GPT-4o · Your data is sent to OpenAI when you message · Conversations are not stored
+        </p>
       </div>
     </div>
   );

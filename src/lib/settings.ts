@@ -2,6 +2,7 @@ const SETTINGS_KEY = 'flashface_settings';
 
 export interface AppSettings {
   geminiApiKey: string;
+  openaiApiKey: string;
   budgetLimitEur: number | null; // null = no limit
   spendingEur: number;
   totalTokensIn: number;
@@ -12,6 +13,7 @@ export interface AppSettings {
 
 const DEFAULTS: AppSettings = {
   geminiApiKey: '',
+  openaiApiKey: '',
   budgetLimitEur: 50,
   spendingEur: 0,
   totalTokensIn: 0,
@@ -56,6 +58,11 @@ export function saveSettings(patch: Partial<AppSettings>): AppSettings {
   const next = { ...getSettings(), ...patch };
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
   return next;
+}
+
+/** Returns the OpenAI API key stored in the dashboard. */
+export function getOpenAiApiKey(): string {
+  return getSettings().openaiApiKey.trim();
 }
 
 /** Returns the API key — dashboard key takes priority over .env */

@@ -26,6 +26,8 @@ import type { Category } from '../types';
 // ─── Layer 1: Server file API ─────────────────────────────────────────────────
 
 const API_URL = '/api/categories';
+/** Companion localStorage key — updated to Date.now() only when a server POST succeeds. */
+const API_EPOCH_KEY = 'flashface_api_epoch';
 
 export async function apiLoadCategories(): Promise<Category[]> {
   try {
@@ -45,7 +47,12 @@ export async function apiSaveCategories(categories: Category[]): Promise<boolean
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(categories),
     });
-    return res.ok;
+    if (res.ok) {
+      // Only update epoch when the write is confirmed — used as tiebreaker in loadBestCategories
+      localStorage.setItem(API_EPOCH_KEY, Date.now().toString());
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -70,6 +77,8 @@ const IDB_NAME = 'flashface-db';
 const IDB_VERSION = 1;
 const IDB_STORE = 'snapshots';
 const IDB_KEY = 'categories';
+/** Companion key stored in the same IDB object store — holds the savedAt timestamp. */
+const IDB_EPOCH_KEY = 'categories_epoch';
 
 function openIDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -99,12 +108,28 @@ export async function idbLoadCategories(): Promise<Category[]> {
   }
 }
 
+async function idbGetEpoch(): Promise<number> {
+  try {
+    const db = await openIDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const req = tx.objectStore(IDB_STORE).get(IDB_EPOCH_KEY);
+      req.onsuccess = () => resolve(typeof req.result === 'number' ? req.result : 0);
+      req.onerror = () => resolve(0);
+    });
+  } catch {
+    return 0;
+  }
+}
+
 export async function idbSaveCategories(categories: Category[]): Promise<void> {
   try {
     const db = await openIDB();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(IDB_STORE, 'readwrite');
-      tx.objectStore(IDB_STORE).put(categories, IDB_KEY);
+      const store = tx.objectStore(IDB_STORE);
+      store.put(categories, IDB_KEY);
+      store.put(Date.now(), IDB_EPOCH_KEY); // epoch in same atomic transaction
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
@@ -116,6 +141,8 @@ export async function idbSaveCategories(categories: Category[]): Promise<void> {
 // ─── Layer 3: localStorage (legacy / initial-render sync read) ────────────────
 
 const LS_KEY = 'flashface_categories';
+/** Updated to Date.now() on every successful localStorage write. Primary epoch for loadBestCategories. */
+const LS_EPOCH_KEY = 'flashface_epoch';
 
 export function lsLoadCategories(): Category[] {
   try {
@@ -132,6 +159,7 @@ export function lsSaveCategories(categories: Category[]): void {
   try {
     const compressed = LZString.compressToUTF16(JSON.stringify(categories));
     localStorage.setItem(LS_KEY, compressed);
+    localStorage.setItem(LS_EPOCH_KEY, Date.now().toString());
   } catch {
     // quota exceeded — silently accept; IndexedDB + file API are the real backups
   }
@@ -139,67 +167,87 @@ export function lsSaveCategories(categories: Category[]): void {
 
 // ─── Unified save (all three layers) ─────────────────────────────────────────
 
-export function saveAllLayers(categories: Category[]): void {
-  // Sync localStorage best-effort
+/**
+ * Saves to all three layers. Returns whether the async layers (IDB + API) succeeded.
+ * Use the result to show a real error indicator in the UI when both async layers fail.
+ */
+export async function saveAllLayers(categories: Category[]): Promise<{ api: boolean; idb: boolean }> {
+  // Layer 3: always write synchronously first (sets LS_EPOCH_KEY too)
   lsSaveCategories(categories);
-  // Async fire-and-forget for large layers
-  idbSaveCategories(categories);
-  apiSaveCategories(categories);
+
+  // Layers 1 + 2 in parallel
+  const [idbResult, apiResult] = await Promise.all([
+    idbSaveCategories(categories).then(() => true).catch(() => false),
+    apiSaveCategories(categories),
+  ]);
+
+  return { idb: idbResult as boolean, api: apiResult };
 }
 
 // ─── Startup load: pick the best source ───────────────────────────────────────
 
 /**
- * Loads categories from all three layers in parallel and returns a merged result.
+ * Loads categories from all three layers in parallel using a two-phase strategy
+ * that correctly handles both research updates AND deletions:
  *
- * Merge strategy (per-category, not per-layer):
- * 1. Build a union of ALL unique category IDs across all three layers.
- * 2. For each ID, pick the version with the LATEST `lastUpdated` timestamp.
- * 3. Cross-sync all layers to this merged result so they converge.
+ * Phase 1 — Pick the "primary" layer using savedAt epoch (newest write wins).
+ *   localStorage is always written synchronously, so it has the newest epoch for
+ *   any change the user just made (including deletions). This means deletions are
+ *   never restored from lagging async layers.
  *
- * This handles all edge cases correctly:
- * - One layer misses a recent deep-research update → winner has newer timestamp
- * - A category was deleted → it was deleted from all layers via saveAllLayers, so it won't reappear
- * - All layers in sync → identical merge result, no unnecessary writes
+ * Phase 2 — For each category ID that EXISTS in the primary layer, pick the version
+ *   with the most recent `lastUpdated` across all layers. This surfaces any research
+ *   data that was written to one layer (e.g. during a research run) but not yet
+ *   propagated to others.
+ *
+ * Categories are only included if they appear in the primary layer — so if you deleted
+ * a category and localStorage has the deletion, it won't be restored from IDB/server.
  */
 export async function loadBestCategories(): Promise<{ categories: Category[]; source: string }> {
-  const [apiCats, idbCats] = await Promise.all([
+  const [[idbCats, idbEpoch], apiCats] = await Promise.all([
+    Promise.all([idbLoadCategories(), idbGetEpoch()]),
     apiLoadCategories(),
-    idbLoadCategories(),
   ]);
   const lsCats = lsLoadCategories();
 
-  // Build a map: id → best version across all layers
-  const bestById = new Map<string, Category>();
-  for (const cat of [...apiCats, ...idbCats, ...lsCats]) {
-    const existing = bestById.get(cat.id);
-    if (!existing) {
-      bestById.set(cat.id, cat);
-    } else {
-      // Keep whichever was updated more recently
-      const existingTs = existing.lastUpdated ? new Date(existing.lastUpdated).getTime() : 0;
-      const incomingTs = cat.lastUpdated   ? new Date(cat.lastUpdated).getTime()   : 0;
-      if (incomingTs > existingTs) bestById.set(cat.id, cat);
+  const lsEpoch  = parseInt(localStorage.getItem(LS_EPOCH_KEY)  || '0');
+  const apiEpoch = parseInt(localStorage.getItem(API_EPOCH_KEY) || '0');
+
+  const layers: { cats: Category[]; label: string; epoch: number }[] = [
+    { cats: lsCats,  label: 'localStorage', epoch: lsEpoch  },
+    { cats: idbCats, label: 'IndexedDB',    epoch: idbEpoch },
+    { cats: apiCats, label: 'server-file',  epoch: apiEpoch },
+  ];
+
+  // Phase 1: pick primary layer by newest epoch (tiebreak: count)
+  const primary = layers.reduce((a, b) => {
+    if (b.epoch !== a.epoch) return b.epoch > a.epoch ? b : a;
+    return b.cats.length > a.cats.length ? b : a;
+  });
+
+  if (primary.cats.length === 0) {
+    return { categories: [], source: primary.label };
+  }
+
+  // Phase 2: for each ID that exists in the primary, take the latest version
+  const merged = primary.cats.map(primaryCat => {
+    let best = primaryCat;
+    const bestTs = () => best.lastUpdated ? new Date(best.lastUpdated).getTime() : 0;
+    for (const layer of layers) {
+      const candidate = layer.cats.find(c => c.id === primaryCat.id);
+      if (candidate) {
+        const ts = candidate.lastUpdated ? new Date(candidate.lastUpdated).getTime() : 0;
+        if (ts > bestTs()) best = candidate;
+      }
     }
-  }
+    return best;
+  });
 
-  const merged = Array.from(bestById.values());
+  // Re-sync lagging layers
+  const bestEpoch = primary.epoch;
+  if (apiEpoch < bestEpoch || apiCats.length !== merged.length)  apiSaveCategories(merged);
+  if (idbEpoch < bestEpoch || idbCats.length !== merged.length)  idbSaveCategories(merged);
+  if (lsEpoch  < bestEpoch || lsCats.length  !== merged.length)  lsSaveCategories(merged);
 
-  // Determine the dominant source label for UI display
-  const maxCount = Math.max(apiCats.length, idbCats.length, lsCats.length);
-  const source = apiCats.length === maxCount ? 'server-file'
-    : idbCats.length === maxCount ? 'IndexedDB'
-    : 'localStorage';
-
-  if (merged.length > 0) {
-    // Cross-sync all layers to the merged truth
-    const needsApiSync = apiCats.length !== merged.length;
-    const needsIdbSync = idbCats.length !== merged.length;
-    const needsLsSync  = lsCats.length  !== merged.length;
-    if (needsApiSync) apiSaveCategories(merged);
-    if (needsIdbSync) idbSaveCategories(merged);
-    if (needsLsSync)  lsSaveCategories(merged);
-  }
-
-  return { categories: merged, source };
+  return { categories: merged, source: primary.label };
 }

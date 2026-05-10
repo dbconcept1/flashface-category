@@ -17,7 +17,38 @@ function useSettings() {
 export function SettingsView({ onRefreshSpending }: { onRefreshSpending?: () => void }) {
   const { settings, update } = useSettings();
 
-  // Key section
+  // OpenAI key section
+  const [openaiKeyInput, setOpenaiKeyInput] = useState('');
+  const [isEditingOpenaiKey, setIsEditingOpenaiKey] = useState(false);
+  const [showOpenaiKey, setShowOpenaiKey] = useState(false);
+  const [openaiKeySaved, setOpenaiKeySaved] = useState(false);
+
+  const hasOpenaiKey = !!settings.openaiApiKey;
+
+  const handleStartEditOpenaiKey = () => {
+    setIsEditingOpenaiKey(true);
+    setOpenaiKeyInput('');
+    setShowOpenaiKey(false);
+  };
+
+  const handleSaveOpenaiKey = () => {
+    const trimmed = openaiKeyInput.trim();
+    if (!trimmed) return;
+    update({ openaiApiKey: trimmed });
+    setIsEditingOpenaiKey(false);
+    setOpenaiKeyInput('');
+    setOpenaiKeySaved(true);
+    setTimeout(() => setOpenaiKeySaved(false), 3000);
+  };
+
+  const handleRemoveOpenaiKey = () => {
+    if (!confirm('Remove the saved OpenAI key?')) return;
+    update({ openaiApiKey: '' });
+    setIsEditingOpenaiKey(false);
+    setOpenaiKeyInput('');
+  };
+
+  // Gemini key section
   const [keyInput, setKeyInput] = useState('');
   const [isEditingKey, setIsEditingKey] = useState(false);
   const [showKey, setShowKey] = useState(false);
@@ -77,7 +108,7 @@ export function SettingsView({ onRefreshSpending }: { onRefreshSpending?: () => 
     <div className="max-w-2xl mx-auto space-y-8">
       <div>
         <h2 className="text-2xl font-black text-white tracking-tight">Settings</h2>
-        <p className="text-sm text-gray-500 mt-1">Configure your Gemini API key and spending cap.</p>
+        <p className="text-sm text-gray-500 mt-1">Configure your API keys and spending cap.</p>
       </div>
 
       {/* ─── API Key ─────────────────────────────────── */}
@@ -180,7 +211,97 @@ export function SettingsView({ onRefreshSpending }: { onRefreshSpending?: () => 
           </span>
         </div>
       </section>
+      {/* ─── OpenAI API Key ─────────────────────────────── */}
+      <section className="bg-[#111111] border border-gray-800 rounded-2xl p-6 space-y-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Key className="w-4 h-4 text-blue-400 shrink-0" />
+          <h3 className="text-sm font-bold text-white uppercase tracking-widest">OpenAI API Key</h3>
+          <span className={cn(
+            'ml-auto text-[10px] font-mono px-2 py-0.5 rounded border uppercase tracking-wider',
+            hasOpenaiKey
+              ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+              : 'text-gray-500 bg-gray-800/50 border-gray-700'
+          )}>
+            {hasOpenaiKey ? '✓ Key active' : '✕ Not configured'}
+          </span>
+        </div>
 
+        {!isEditingOpenaiKey ? (
+          <div className="flex gap-2">
+            <div className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-500 flex items-center">
+              {hasOpenaiKey ? '••••••••••••••••••••••••' : 'No key set'}
+            </div>
+            <button
+              onClick={handleStartEditOpenaiKey}
+              className="px-4 py-2 bg-blue-700 hover:bg-blue-600 text-white rounded-lg text-sm font-bold transition-colors"
+            >
+              {hasOpenaiKey ? 'Change' : 'Add Key'}
+            </button>
+            {hasOpenaiKey && (
+              <button
+                onClick={handleRemoveOpenaiKey}
+                className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-rose-400 rounded-lg text-sm transition-colors"
+                title="Remove saved key"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <input
+                  // eslint-disable-next-line jsx-a11y/no-autofocus
+                  autoFocus
+                  type={showOpenaiKey ? 'text' : 'password'}
+                  value={openaiKeyInput}
+                  onChange={e => setOpenaiKeyInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleSaveOpenaiKey()}
+                  placeholder="sk-..."
+                  className="w-full bg-gray-900 border border-blue-500/50 text-white rounded-lg px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 pr-10"
+                />
+                <button
+                  onClick={() => setShowOpenaiKey(v => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                  tabIndex={-1}
+                >
+                  {showOpenaiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <button
+                onClick={handleSaveOpenaiKey}
+                disabled={!openaiKeyInput.trim()}
+                className="px-4 py-2 bg-blue-700 hover:bg-blue-600 text-white rounded-lg text-sm font-bold transition-colors disabled:opacity-40"
+              >
+                Save
+              </button>
+              <button
+                onClick={() => { setIsEditingOpenaiKey(false); setOpenaiKeyInput(''); }}
+                className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded-lg text-sm transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {openaiKeySaved && (
+          <div className="flex items-center gap-2 text-xs text-emerald-400">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            Key saved in browser localStorage
+          </div>
+        )}
+
+        <div className="flex items-start gap-2 bg-blue-500/5 border border-blue-500/15 rounded-lg px-4 py-3 text-xs text-gray-400">
+          <Info className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5" />
+          <span>
+            Powers the live chat in the ChatGPT view (GPT-4o). Get a key at{' '}
+            <span className="text-blue-400 font-mono">platform.openai.com/api-keys</span>.
+            Stored only in your browser’s localStorage.
+          </span>
+        </div>
+      </section>
       {/* ─── Budget / Spending ───────────────────────── */}
       <section className="bg-[#111111] border border-gray-800 rounded-2xl p-6 space-y-5">
         <div className="flex items-center gap-2">
