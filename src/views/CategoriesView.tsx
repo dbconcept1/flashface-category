@@ -2,6 +2,7 @@ import { useState, Fragment } from 'react';
 import { Category, Weights, CategoryStatus } from '../types';
 import { calculateDecisionScore, calculateLtvCac, cn, getMacroSector } from '../utils';
 import { LayoutGrid, List, Search, Ban, Trophy, Sparkles, Loader2, Square, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { CategoryResearchState } from '../services/aiService';
 
 interface Props {
   categories: Category[];
@@ -16,7 +17,7 @@ interface Props {
   onStopBulkResearch: () => void;
   isBulkResearching: boolean;
   bulkStats: { total: number; done: number; failed: number } | null;
-  enhancingIds: Record<string, any>;
+  enhancingIds: Record<string, CategoryResearchState>;
 }
 
 export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateStatus, onDeepSearch, onDeepSearchAllNew, onRefreshResearched, onRefreshFailed, onStopBulkResearch, isBulkResearching, bulkStats, enhancingIds }: Props) {
@@ -83,7 +84,7 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
         )}
       >
         <div className="p-4 border-b border-gray-900 shrink-0 w-64">
-          <h3 className="font-bold text-gray-500 text-[10px] uppercase tracking-widest flex items-center justify-between">
+          <h3 className="font-bold text-gray-400 text-xs uppercase tracking-widest flex items-center justify-between">
             Mother Categories
             <span className="bg-gray-800 text-gray-400 px-1.5 py-0.5 rounded">{groupedCategories.length}</span>
           </h3>
@@ -98,7 +99,6 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
                   className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-gray-800/50 transition-colors group cursor-pointer text-left"
                 >
                   <span className="text-sm font-medium text-gray-300 group-hover:text-white truncate">{group.macro}</span>
-                  <span className="text-[10px] font-mono text-gray-500 bg-gray-900 border border-gray-800 px-1.5 py-0.5 rounded">{group.totalCount}</span>
                 </button>
                 {isExpanded && (
                   <div className="pl-3 space-y-0.5 border-l border-gray-800/50 ml-2 py-1">
@@ -112,7 +112,7 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
                         className="w-full flex items-center justify-between px-2 py-1 rounded text-xs text-gray-500 hover:text-orange-400 hover:bg-orange-500/10 transition-colors text-left"
                       >
                         <span className="truncate pr-2">{sub.industry}</span>
-                        <span className="text-[9px] font-mono opacity-50">{sub.categories.length}</span>
+                        <span className="text-[10px] font-mono opacity-60">{sub.categories.length}</span>
                       </button>
                     ))}
                   </div>
@@ -315,9 +315,24 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
                        </p>
                     </div>
                     <div>
-                       <p className="text-xs text-gray-500 uppercase min-h-[16px]">Market Size</p>
-                       <p className="text-sm font-medium text-gray-300 truncate" title={cat.marketSizeNL}>{cat.marketSizeNL}</p>
-                       <p className="text-xs font-bold text-orange-400 mt-1 truncate" title="Exact Audience Size (NL)">{cat.audienceSizeNL || <span className="opacity-30">N/A</span>}</p>
+                       <p className="text-xs text-gray-500 uppercase min-h-[16px]">Market Size (NL)</p>
+                       <p className="text-sm font-medium text-gray-300 truncate" title={cat.marketSizeNL}>{cat.marketSizeNL || <span className="opacity-30">N/A</span>}</p>
+                       {/* TAM → SAM → SOM funnel */}
+                       {cat.somNL != null ? (
+                         <div
+                           className="mt-1.5 flex items-center gap-1 text-[10px] font-mono cursor-help"
+                           title={cat.funnelBreakdownNL || 'TAM → SAM → SOM funnel'}
+                         >
+                           <span className="text-gray-500">{(cat.tamNL ?? 0).toLocaleString()}</span>
+                           <span className="text-gray-700">→</span>
+                           <span className="text-gray-400">{(cat.samNL ?? 0).toLocaleString()}</span>
+                           <span className="text-gray-700">→</span>
+                           <span className="text-orange-400 font-bold">{(cat.somNL).toLocaleString()}</span>
+                           <span className="text-gray-600 ml-0.5">SOM</span>
+                         </div>
+                       ) : (
+                         <p className="text-xs font-bold text-orange-400 mt-1 truncate" title="Audience Size NL">{cat.audienceSizeNL || <span className="opacity-30">N/A</span>}</p>
+                       )}
                     </div>
                      <div>
                        <p className="text-xs text-gray-500 uppercase min-h-[16px]">Loyalty</p>
@@ -400,28 +415,28 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
           <div className="flex-1 min-h-0 overflow-auto">
             <table className="w-full text-left border-collapse min-w-[860px] bg-[#111111]">
               <thead className="sticky top-0 z-20">
-                <tr className="border-b border-gray-800 bg-gray-900 text-gray-500 uppercase tracking-widest text-[10px]">
-                  <th className="py-2 px-3 font-normal sticky left-0 z-30 bg-gray-900 shadow-[4px_0_12px_rgba(0,0,0,0.5)] border-r border-gray-800" title="The business category name">Category</th>
-                  <th className="py-2 px-2 font-normal text-right cursor-help w-[60px]" title="Score = (LTV:CAC + Base CLV + Market Size) * (Acquisition Difficulty, Loyalty, Story, Niche Multipliers)">Score</th>
-                  <th className="py-2 px-2 font-normal text-right cursor-help w-[60px]" title="Customer Lifetime Value / Acquisition Cost. 0 means not enough AI data found.">LTV:CAC</th>
-                  <th className="py-2 px-2 font-normal text-right cursor-help w-[80px]" title="Estimated Customer Lifetime Value in Euros">CLV</th>
-                  <th className="py-2 px-2 font-normal cursor-help w-[80px]" title="Estimated difficulty to acquire a customer">Acq. Diff</th>
-                  <th className="py-2 px-2 font-normal cursor-help min-w-[120px]" title="Exact Audience Size in NL (Calculated)">Audience</th>
-                  <th className="py-2 px-2 font-normal cursor-help w-[80px]" title="How emotionally attached a customer is to the product/service">Loyalty</th>
-                  <th className="py-2 px-2 font-normal cursor-help w-[100px]" title="Current tracking pipeline status">Status</th>
-                  <th className="py-2 px-2 font-normal text-right w-[80px]">Actions</th>
+                <tr className="border-b border-gray-800 bg-[#050505]/80 text-xs text-gray-500 uppercase tracking-widest" style={{top: '0'}}>
+                  <th className="py-3 px-3 font-normal sticky left-0 z-30 bg-gray-900 shadow-[4px_0_12px_rgba(0,0,0,0.5)] border-r border-gray-800" title="The business category name">Category</th>
+                  <th className="py-3 px-2 font-normal text-right cursor-help w-[60px]" title="Score = (LTV:CAC + Base CLV + Market Size) * (Acquisition Difficulty, Loyalty, Story, Niche Multipliers)">Score</th>
+                  <th className="py-3 px-2 font-normal text-right cursor-help w-[60px]" title="Customer Lifetime Value / Acquisition Cost. 0 means not enough AI data found.">LTV:CAC</th>
+                  <th className="py-3 px-2 font-normal text-right cursor-help w-[80px]" title="Estimated Customer Lifetime Value in Euros">CLV</th>
+                  <th className="py-3 px-2 font-normal cursor-help w-[80px]" title="Estimated difficulty to acquire a customer">Acq. Diff</th>
+                  <th className="py-3 px-2 font-normal cursor-help min-w-[120px]" title="Exact Audience Size in NL (Calculated)">Audience</th>
+                  <th className="py-3 px-2 font-normal cursor-help w-[80px]" title="How emotionally attached a customer is to the product/service">Loyalty</th>
+                  <th className="py-3 px-2 font-normal cursor-help w-[100px]" title="Current tracking pipeline status">Status</th>
+                  <th className="py-3 px-2 font-normal text-right w-[80px]">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {groupedCategories.map(macroGroup => (
                   <Fragment key={macroGroup.macro}>
                     {/* Macro sector banner — stays visible as you scroll into sub-industries */}
-                    <tr className="sticky top-[29px] z-10">
+                    <tr className="sticky top-[37px] z-10">
                       <td colSpan={9} className="py-2 px-4 bg-[#050505] border-y border-gray-800">
                         <div className="flex items-center gap-3">
-                          <span className="text-[11px] font-black text-white tracking-tight uppercase">{macroGroup.macro}</span>
+                          <span className="text-sm font-bold text-white tracking-tight uppercase">{macroGroup.macro}</span>
                           <div className="h-px flex-1 bg-gray-800/60"></div>
-                          <span className="text-[9px] font-mono text-gray-600">{macroGroup.totalCount}</span>
+                          <span className="text-xs font-mono text-gray-500">{macroGroup.totalCount}</span>
                         </div>
                       </td>
                     </tr>
@@ -429,9 +444,9 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
                       <Fragment key={group.industry}>
                         {/* Industry sub-group header */}
                         <tr id={`industry-${group.industry.replace(/\s+/g, '-')}`} className="bg-[#0a0a0a] border-b border-gray-800">
-                          <td colSpan={9} className="py-1.5 px-4 pl-8">
-                            <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">{group.industry}</span>
-                            <span className="ml-2 text-[9px] font-mono text-gray-600 bg-gray-900 border border-gray-800 px-1.5 py-0.5 rounded">{group.categories.length}</span>
+                          <td colSpan={9} className="py-2 px-4 pl-8">
+                            <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">{group.industry}</span>
+                            <span className="ml-2 text-xs font-mono text-gray-500 bg-gray-900 border border-gray-800 px-1.5 py-0.5 rounded">{group.categories.length}</span>
                           </td>
                         </tr>
                         {group.categories.map((c) => (
@@ -464,10 +479,28 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
                               €{c.estimatedCLV}
                             </td>
                             <td className={cn("py-2 px-2 text-xs whitespace-nowrap", c.acquisitionDifficulty === 'Easy' ? 'text-emerald-400' : c.acquisitionDifficulty === 'Hard' ? 'text-rose-400' : 'text-gray-400')}>{c.acquisitionDifficulty}</td>
-                            <td className="py-2 px-2 text-xs font-medium text-orange-400 leading-tight" title={c.audienceSizeNL}>{c.audienceSizeNL || <span className="opacity-30">N/A</span>}</td>
+                            <td
+                              className="py-2 px-2 leading-tight"
+                              title={c.funnelBreakdownNL || c.audienceSizeNL || 'Run deep research to compute TAM→SAM→SOM funnel'}
+                            >
+                              {c.somNL != null ? (
+                                <div className="flex flex-col gap-0.5">
+                                  <div className="flex items-center gap-1 font-mono text-[10px]">
+                                    <span className="text-gray-500">{(c.tamNL ?? 0).toLocaleString()}</span>
+                                    <span className="text-gray-700">→</span>
+                                    <span className="text-gray-400">{(c.samNL ?? 0).toLocaleString()}</span>
+                                    <span className="text-gray-700">→</span>
+                                    <span className="text-orange-400 font-bold">{(c.somNL).toLocaleString()}</span>
+                                  </div>
+                                  <span className="text-[9px] uppercase tracking-wider text-gray-600">TAM → SAM → SOM</span>
+                                </div>
+                              ) : (
+                                <span className="text-xs font-medium text-orange-400">{c.audienceSizeNL || <span className="opacity-30">N/A</span>}</span>
+                              )}
+                            </td>
                             <td className={cn("py-2 px-2 text-xs whitespace-nowrap", c.emotionalLoyalty === 'High' ? 'text-emerald-400' : c.emotionalLoyalty === 'Low' ? 'text-rose-400' : 'text-gray-400')}>{c.emotionalLoyalty}</td>
                             <td className="py-2 px-2 whitespace-nowrap">
-                              <span className={cn("inline-flex items-center px-1.5 py-0.5 rounded text-[9px] uppercase font-bold tracking-wider",
+                              <span className={cn("inline-flex items-center px-2 py-0.5 rounded text-xs uppercase font-bold tracking-wider",
                                 c.status === 'Winner' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
                                 c.status === 'Killed' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' :
                                 c.status === 'Shortlisted' ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20' :
@@ -485,27 +518,27 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
                                   if (state === 'queued') return (
                                     <div className="flex items-center gap-1.5 w-[80px]">
                                       <div className="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse shrink-0" />
-                                      <span className="text-[10px] text-yellow-400 font-mono">Queued</span>
+                                      <span className="text-xs text-yellow-400 font-mono">Queued</span>
                                     </div>
                                   );
                                   if (state === 'error') return (
                                     <div className="flex items-center gap-1.5 w-[80px]" title={entry.__error}>
                                       <AlertCircle className="w-3 h-3 text-rose-400 shrink-0" />
-                                      <span className="text-[10px] text-rose-400 truncate">Failed</span>
+                                      <span className="text-xs text-rose-400 truncate">Failed</span>
                                     </div>
                                   );
                                   if (state === 'done') return (
                                     <div className="flex items-center gap-1.5 w-[80px]">
                                       <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
-                                      <span className="text-[10px] text-emerald-400">Done</span>
+                                      <span className="text-xs text-emerald-400">Done</span>
                                     </div>
                                   );
                                   // running
                                   return (
                                     <div className="flex flex-col items-end w-[100px] shrink-0">
                                       <div className="flex w-full justify-between items-center mb-1">
-                                        <span className="text-[10px] text-orange-400 font-mono">{getProgress(c.id)}%</span>
-                                        <span className="text-[10px] text-orange-400 truncate ml-1 max-w-[60px]">{entry.overall || 'Thinking...'}</span>
+                                        <span className="text-xs text-orange-400 font-mono">{getProgress(c.id)}%</span>
+                                        <span className="text-xs text-orange-400 truncate ml-1 max-w-[60px]">{entry.overall || 'Thinking...'}</span>
                                       </div>
                                       <div className="w-full h-1 bg-gray-900 rounded-full overflow-hidden">
                                         <div className="h-full bg-orange-500 transition-all duration-300" style={{ width: `${getProgress(c.id)}%` }} />

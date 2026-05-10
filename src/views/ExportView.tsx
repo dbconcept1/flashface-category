@@ -39,7 +39,7 @@ export function ExportView({ categories }: Props) {
   };
 
   const handleExportCSV = () => {
-    const headers = ['Name', 'Target Audience', 'Status', 'Estimated CLV', 'Estimated CAC', 'Monthly Churn %', 'CAGR', 'Market Size Global', 'Market Size EU', 'Market Size NL', 'Audience Size NL', 'Regulatory Risk NL', 'Brand Type', 'Story Depth', 'Micro-niche Potential', 'Acquisition Difficulty', 'Emotional Loyalty'];
+    const headers = ['Name', 'Target Audience', 'Status', 'Estimated CLV', 'Estimated CAC', 'Monthly Churn %', 'CAGR', 'Market Size Global', 'Market Size EU', 'Market Size NL', 'Audience Size NL', 'TAM NL', 'SAM NL', 'SOM NL', 'Funnel Breakdown NL', 'Regulatory Risk NL', 'Brand Type', 'Story Depth', 'Micro-niche Potential', 'Acquisition Difficulty', 'Emotional Loyalty'];
     const rows = categories.map(c => [
       `"${c.name.replace(/"/g, '""')}"`,
       `"${c.targetAudience.replace(/"/g, '""')}"`,
@@ -52,6 +52,10 @@ export function ExportView({ categories }: Props) {
       `"${(c.marketSizeEU || '').replace(/"/g, '""')}"`,
       `"${(c.marketSizeNL || '').replace(/"/g, '""')}"`,
       `"${(c.audienceSizeNL || '').replace(/"/g, '""')}"`,
+      c.tamNL ?? '',
+      c.samNL ?? '',
+      c.somNL ?? '',
+      `"${(c.funnelBreakdownNL || '').replace(/"/g, '""')}"`,
       `"${c.regulatoryRiskNL || ''}"`,
       `"${c.brandType || ''}"`,
       c.storyDepth,

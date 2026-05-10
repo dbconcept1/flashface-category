@@ -150,8 +150,17 @@ export function saveAllLayers(categories: Category[]): void {
 // ─── Startup load: pick the best source ───────────────────────────────────────
 
 /**
- * Loads categories from all three layers in parallel and returns whichever
- * has the most entries (most complete). Also cross-syncs all layers to the winner.
+ * Loads categories from all three layers in parallel and returns a merged result.
+ *
+ * Merge strategy (per-category, not per-layer):
+ * 1. Build a union of ALL unique category IDs across all three layers.
+ * 2. For each ID, pick the version with the LATEST `lastUpdated` timestamp.
+ * 3. Cross-sync all layers to this merged result so they converge.
+ *
+ * This handles all edge cases correctly:
+ * - One layer misses a recent deep-research update → winner has newer timestamp
+ * - A category was deleted → it was deleted from all layers via saveAllLayers, so it won't reappear
+ * - All layers in sync → identical merge result, no unnecessary writes
  */
 export async function loadBestCategories(): Promise<{ categories: Category[]; source: string }> {
   const [apiCats, idbCats] = await Promise.all([
@@ -160,20 +169,37 @@ export async function loadBestCategories(): Promise<{ categories: Category[]; so
   ]);
   const lsCats = lsLoadCategories();
 
-  const candidates: { cats: Category[]; label: string }[] = [
-    { cats: apiCats, label: 'server-file' },
-    { cats: idbCats, label: 'IndexedDB' },
-    { cats: lsCats, label: 'localStorage' },
-  ];
-
-  const best = candidates.reduce((a, b) => (b.cats.length > a.cats.length ? b : a));
-
-  if (best.cats.length > 0) {
-    // Sync all lagging layers up to the winner
-    if (apiCats.length < best.cats.length) apiSaveCategories(best.cats);
-    if (idbCats.length < best.cats.length) idbSaveCategories(best.cats);
-    if (lsCats.length < best.cats.length) lsSaveCategories(best.cats);
+  // Build a map: id → best version across all layers
+  const bestById = new Map<string, Category>();
+  for (const cat of [...apiCats, ...idbCats, ...lsCats]) {
+    const existing = bestById.get(cat.id);
+    if (!existing) {
+      bestById.set(cat.id, cat);
+    } else {
+      // Keep whichever was updated more recently
+      const existingTs = existing.lastUpdated ? new Date(existing.lastUpdated).getTime() : 0;
+      const incomingTs = cat.lastUpdated   ? new Date(cat.lastUpdated).getTime()   : 0;
+      if (incomingTs > existingTs) bestById.set(cat.id, cat);
+    }
   }
 
-  return { categories: best.cats, source: best.label };
+  const merged = Array.from(bestById.values());
+
+  // Determine the dominant source label for UI display
+  const maxCount = Math.max(apiCats.length, idbCats.length, lsCats.length);
+  const source = apiCats.length === maxCount ? 'server-file'
+    : idbCats.length === maxCount ? 'IndexedDB'
+    : 'localStorage';
+
+  if (merged.length > 0) {
+    // Cross-sync all layers to the merged truth
+    const needsApiSync = apiCats.length !== merged.length;
+    const needsIdbSync = idbCats.length !== merged.length;
+    const needsLsSync  = lsCats.length  !== merged.length;
+    if (needsApiSync) apiSaveCategories(merged);
+    if (needsIdbSync) idbSaveCategories(merged);
+    if (needsLsSync)  lsSaveCategories(merged);
+  }
+
+  return { categories: merged, source };
 }

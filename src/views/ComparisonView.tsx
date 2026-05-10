@@ -86,6 +86,7 @@ export function ComparisonView({ categories, weights, maxClv }: Props) {
               <th className="py-4 px-4 cursor-help" title="Global Market Size">Global Mkt</th>
               <th className="py-4 px-4 cursor-help" title="European Union Market Size">EU Mkt</th>
               <th className="py-4 px-4 cursor-help" title="Netherlands Market Size">NL Mkt</th>
+              <th className="py-4 px-4 cursor-help" title="TAM → SAM → SOM funnel. Hover individual cells to see the full step-by-step breakdown.">TAM→SOM</th>
               <th className="py-4 px-4 cursor-help" title="Regulatory Risk in the NL. Low is better.">Reg. Risk</th>
               <th className="py-4 px-4 cursor-help" title="Estimated difficulty of user acquisition.">Acq. Diff</th>
               <th className="py-4 px-4 cursor-help" title="Estimated loyalty level of customers in this market.">Loyalty</th>
@@ -128,6 +129,22 @@ export function ComparisonView({ categories, weights, maxClv }: Props) {
                 <td className="p-2 px-4 text-gray-300 font-mono text-sm max-w-[150px] truncate" title={c.marketSizeGlobal}>{c.marketSizeGlobal || '-'}</td>
                 <td className="p-2 px-4 text-gray-300 font-mono text-sm max-w-[120px] truncate" title={c.marketSizeEU}>{c.marketSizeEU || '-'}</td>
                 <td className="p-2 px-4 text-gray-300 font-mono text-sm max-w-[120px] truncate" title={c.marketSizeNL}>{c.marketSizeNL || '-'}</td>
+                <td className="p-2 px-4" title={c.funnelBreakdownNL || 'Run deep research to compute TAM→SAM→SOM funnel'}>
+                  {c.somNL != null ? (
+                    <div className="flex flex-col gap-0.5">
+                      <div className="flex items-center gap-1 font-mono text-xs">
+                        <span className="text-gray-500">{(c.tamNL ?? 0).toLocaleString()}</span>
+                        <span className="text-gray-700">→</span>
+                        <span className="text-gray-400">{(c.samNL ?? 0).toLocaleString()}</span>
+                        <span className="text-gray-700">→</span>
+                        <span className="text-orange-400 font-bold">{c.somNL.toLocaleString()}</span>
+                      </div>
+                      <span className="text-[9px] uppercase tracking-wider text-gray-600">TAM → SAM → SOM</span>
+                    </div>
+                  ) : (
+                    <span className="text-gray-600 text-xs">-</span>
+                  )}
+                </td>
                 <td className="p-2 px-4 font-medium">
                   <span className={cn(c.regulatoryRiskNL === 'Low' ? 'text-emerald-400' : c.regulatoryRiskNL === 'High' ? 'text-rose-400' : 'text-orange-400')}>
                     {c.regulatoryRiskNL || '-'}

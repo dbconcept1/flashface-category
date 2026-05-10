@@ -12,6 +12,7 @@ interface Props {
   onCancel: () => void;
   onDelete?: (id: string) => void;
   onPartialUpdate?: (update: Partial<Category>) => void;
+  onSpendingChange?: () => void;
 }
 
 const defaultCategory: Omit<Category, 'id' | 'lastUpdated'> = {
@@ -27,6 +28,10 @@ const defaultCategory: Omit<Category, 'id' | 'lastUpdated'> = {
   marketSizeGlobal: '',
   marketSizeEU: '',
   audienceSizeNL: '',
+  tamNL: 0,
+  samNL: 0,
+  somNL: 0,
+  funnelBreakdownNL: '',
   cagr: '',
   regulatoryRiskNL: 'Medium',
   legalAndAdRestrictions: '',
@@ -42,15 +47,15 @@ const defaultCategory: Omit<Category, 'id' | 'lastUpdated'> = {
   notes: '',
 };
 
-export function EditCategoryView({ category, onSave, onCancel, onDelete, onPartialUpdate }: Props) {
+export function EditCategoryView({ category, onSave, onCancel, onDelete, onPartialUpdate, onSpendingChange }: Props) {
   const [formData, setFormData] = useState<Partial<Category>>(category || defaultCategory);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhancingStatus, setEnhancingStatus] = useState<ResearchProgress | null>(null);
-  const [activeTab, setActiveTab] = useState<'unitEconomics' | 'marketDynamics' | 'localCompetitors' | 'globalCompetitors' | 'foundersAndTeam' | 'legalLogistics' | 'suppliersBudget'>(() => {
+  const [activeTab, setActiveTab] = useState<'unitEconomics' | 'marketDynamics' | 'localCompetitors' | 'globalCompetitors' | 'foundersAndTeam' | 'legalLogistics' | 'suppliersBudget' | 'adIntelligence' | 'retentionEngineering'>(() => {
     if (!category || !category.agentResults) return 'unitEconomics';
-    const keys: Array<'unitEconomics' | 'marketDynamics' | 'localCompetitors' | 'globalCompetitors' | 'foundersAndTeam' | 'legalLogistics' | 'suppliersBudget'> = [
+    const keys: Array<'unitEconomics' | 'marketDynamics' | 'localCompetitors' | 'globalCompetitors' | 'foundersAndTeam' | 'legalLogistics' | 'suppliersBudget' | 'adIntelligence' | 'retentionEngineering'> = [
       'unitEconomics', 'marketDynamics', 'localCompetitors', 'globalCompetitors', 
-      'foundersAndTeam', 'legalLogistics', 'suppliersBudget'
+      'foundersAndTeam', 'legalLogistics', 'suppliersBudget', 'adIntelligence', 'retentionEngineering'
     ];
     for (const k of keys) {
       if (category.agentResults[k]) return k;
@@ -126,6 +131,7 @@ export function EditCategoryView({ category, onSave, onCancel, onDelete, onParti
     } finally {
       setIsEnhancing(false);
       setEnhancingStatus(null);
+      onSpendingChange?.();
     }
   };
 
@@ -343,15 +349,58 @@ export function EditCategoryView({ category, onSave, onCancel, onDelete, onParti
                   />
                 </div>
                  <div className="space-y-1">
-                  <label className="text-[10px] text-orange-500/80 uppercase tracking-widest font-bold">True Audience NL</label>
+                  <label className="text-[10px] text-orange-500/80 uppercase tracking-widest font-bold">True Audience NL (SOM label)</label>
                   <input 
                     type="text" 
                     value={formData.audienceSizeNL || ''}
                     onChange={e => handleChange('audienceSizeNL', e.target.value)}
-                    placeholder="150k users"
+                    placeholder="~12,400 reachable targets"
                     className="w-full bg-transparent border-b border-dashed border-orange-900/50 text-orange-400 px-0 py-1 focus:outline-none font-mono text-sm"
                   />
                 </div>
+              </div>
+              {/* TAM / SAM / SOM numeric funnel */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-600 uppercase tracking-widest font-bold">TAM (count)</label>
+                  <input 
+                    type="number"
+                    value={formData.tamNL || 0}
+                    onChange={e => handleChange('tamNL', parseInt(e.target.value) || 0)}
+                    placeholder="100000"
+                    className="w-full bg-transparent border-b border-dashed border-gray-800 text-gray-400 px-0 py-1 focus:outline-none font-mono text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-600 uppercase tracking-widest font-bold">SAM (count)</label>
+                  <input 
+                    type="number"
+                    value={formData.samNL || 0}
+                    onChange={e => handleChange('samNL', parseInt(e.target.value) || 0)}
+                    placeholder="50000"
+                    className="w-full bg-transparent border-b border-dashed border-gray-800 text-gray-400 px-0 py-1 focus:outline-none font-mono text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] text-orange-500/80 uppercase tracking-widest font-bold">SOM (count)</label>
+                  <input 
+                    type="number"
+                    value={formData.somNL || 0}
+                    onChange={e => handleChange('somNL', parseInt(e.target.value) || 0)}
+                    placeholder="15000"
+                    className="w-full bg-transparent border-b border-dashed border-orange-900/50 text-orange-400 px-0 py-1 focus:outline-none font-mono text-xs"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] text-gray-600 uppercase tracking-widest font-bold">Funnel Breakdown</label>
+                <textarea 
+                  value={formData.funnelBreakdownNL || ''}
+                  onChange={e => handleChange('funnelBreakdownNL', e.target.value)}
+                  placeholder="1. 100,000 restaurants in NL (CBS 2024) [TAM] → 2. 52,000 with social media (52%) → 3. 15,000 with budget... [SOM]"
+                  rows={3}
+                  className="w-full bg-transparent border border-dashed border-gray-800 text-gray-400 px-2 py-1 focus:outline-none font-mono text-xs rounded resize-none"
+                />
               </div>
                <div className="grid grid-cols-2 gap-4">
                  <div className="space-y-1">
@@ -550,6 +599,8 @@ export function EditCategoryView({ category, onSave, onCancel, onDelete, onParti
               {[
                 { id: 'unitEconomics', label: 'Unit Economics' },
                 { id: 'marketDynamics', label: 'Market Dynamics' },
+                { id: 'adIntelligence', label: '📣 Ad Intelligence' },
+                { id: 'retentionEngineering', label: '🔄 Retention Engineering' },
                 { id: 'localCompetitors', label: 'Local Competitors' },
                 { id: 'globalCompetitors', label: 'Global Competitors' },
                 { id: 'foundersAndTeam', label: 'Founders & Team' },

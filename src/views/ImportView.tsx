@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { UploadCloud, FileText, Loader2, Sparkles, CheckCircle2, AlertCircle, Play, Pause, RefreshCw, Image as ImageIcon } from 'lucide-react';
 import { Category } from '../types';
 import { extractCategoriesFromText, extractCompanyFromImage } from '../services/aiService';
+import stringSimilarity from 'string-similarity';
 
 export interface DocumentTask {
   id: string;
@@ -13,6 +14,8 @@ export interface DocumentTask {
   pdfData?: {name: string, data: string, mimeType: string};
   imageData?: {name: string, data: string, mimeType: string};
   progressText: string;
+  /** 0–100 while extracting, drives the progress bar */
+  scanPercent?: number;
 }
 
 interface ImportState {
@@ -26,7 +29,53 @@ interface Props {
   existingCategories: Category[];
 }
 
-const CHUNK_SIZE = 40000; // characters
+const CHUNK_SIZE    = 35_000; // chars per text batch
+const TEXT_OVERLAP  = 800;    // char overlap between adjacent text batches to avoid boundary misses
+const PDF_BATCH_PGS = 100;    // pages per PDF batch
+const DEDUP_THRESH  = 0.78;   // string-similarity threshold — above this = duplicate
+
+function normalizeForDedup(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Remove categories from `incoming` that are too similar to anything already in `existingNames`.
+ * Also deduplicates within the incoming batch itself.
+ */
+function deduplicateIncoming(
+  incoming: Partial<Category>[],
+  existingNames: string[]
+): Partial<Category>[] {
+  const known = existingNames.map(normalizeForDedup).filter(Boolean);
+  const accepted: Partial<Category>[] = [];
+  for (const cat of incoming) {
+    if (!cat.name?.trim()) continue;
+    const norm = normalizeForDedup(cat.name);
+    if (!norm) continue;
+    if (known.includes(norm)) continue;
+    if (known.length > 0 && stringSimilarity.findBestMatch(norm, known).bestMatch.rating >= DEDUP_THRESH) continue;
+    const acceptedNorms = accepted.map(c => normalizeForDedup(c.name!)).filter(Boolean);
+    if (acceptedNorms.length > 0 && stringSimilarity.findBestMatch(norm, acceptedNorms).bestMatch.rating >= DEDUP_THRESH) continue;
+    accepted.push(cat);
+    known.push(norm); // update rolling known list
+  }
+  return accepted;
+}
+
+/**
+ * Estimate PDF page count from base64 data.
+ * Tries to read /Count from the PDF page tree; falls back to size-based estimation.
+ */
+function estimatePdfPageCount(base64Data: string): number {
+  try {
+    // Sample the beginning of the file where the page tree catalog usually lives
+    const decoded = atob(base64Data.substring(0, 40_000));
+    const matches = [...decoded.matchAll(/\/Count\s+(\d+)/g)];
+    if (matches.length > 0) return Math.max(...matches.map(m => parseInt(m[1])));
+  } catch { /* atob can throw on binary data — ignore */ }
+  // Fallback: base64 is ~133% of binary size; assume ~50 KB per page on average
+  return Math.max(1, Math.ceil((base64Data.length * 0.75) / 50_000));
+}
 
 export function ImportView({ onImport, state, setState, existingCategories }: Props) {
   const { tasks } = state;
@@ -102,103 +151,125 @@ export function ImportView({ onImport, state, setState, existingCategories }: Pr
             }
 
           } else if (task.text) {
-            // Text chunking
-            let extractedTotal = 0;
-            const totalChunks = Math.ceil(task.text.length / CHUNK_SIZE);
+            // ── Text: sequential character-range batches with overlap + dedup ──
+            const totalLen    = task.text.length;
+            const totalBatches = Math.ceil(totalLen / CHUNK_SIZE);
             let combinedNewCats: Partial<Category>[] = [];
-            
-            for (let i = 0; i < totalChunks; i++) {
-              // Check if status changed (paused/error)
-              if (taskStatusRef.current[task.id] !== 'extracting') return; // abort if paused
+            const runningNames: string[] = [...existingCategories.map(c => c.name)];
+            const fmt = (n: number) => n.toLocaleString();
+
+            for (let i = 0; i < totalBatches; i++) {
+              if (taskStatusRef.current[task.id] !== 'extracting') return;
+
+              const chunkStart = i === 0 ? 0 : i * CHUNK_SIZE - TEXT_OVERLAP;
+              const chunkEnd   = Math.min(totalLen, (i + 1) * CHUNK_SIZE);
+              const pct        = Math.round(i / totalBatches * 100);
 
               setState(s => {
                 const next = [...s.tasks];
                 const idx = next.findIndex(t => t.id === task.id);
-                if (idx !== -1) {
-                  next[idx] = { ...next[idx], progressText: `Scanning part ${i + 1} of ${totalChunks}...` };
-                }
+                if (idx !== -1) next[idx] = {
+                  ...next[idx],
+                  progressText: `Batch ${i + 1}/${totalBatches} — chars ${fmt(i * CHUNK_SIZE)}–${fmt(chunkEnd)} of ${fmt(totalLen)} (${pct}%)`,
+                  scanPercent: pct,
+                };
                 return { ...s, tasks: next };
               });
 
-              const chunk = task.text.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-              
-              const newItems = await extractCategoriesFromText({
+              const chunk = task.text.substring(chunkStart, chunkEnd);
+              const rawItems = await extractCategoriesFromText({
                 text: chunk,
-                existingCategoryNames: existingCategories.map(c => c.name).concat(combinedNewCats.map(c => c.name as string))
+                existingCategoryNames: runningNames,
               });
 
-              extractedTotal += newItems.length;
-              combinedNewCats = [...combinedNewCats, ...newItems];
+              const uniqueItems = deduplicateIncoming(rawItems, runningNames);
+              uniqueItems.forEach(c => c.name && runningNames.push(c.name));
+              combinedNewCats = [...combinedNewCats, ...uniqueItems];
 
-              if (newItems.length > 0) {
-                onImport(newItems);
+              if (uniqueItems.length > 0) {
+                onImport(uniqueItems);
+                setState(s => {
+                  const next = [...s.tasks];
+                  const idx = next.findIndex(t => t.id === task.id);
+                  if (idx !== -1) next[idx] = { ...next[idx], categoriesFound: next[idx].categoriesFound + uniqueItems.length };
+                  return { ...s, tasks: next };
+                });
               }
-
-              setState(s => {
-                const next = [...s.tasks];
-                const idx = next.findIndex(t => t.id === task.id);
-                if (idx !== -1) {
-                  next[idx] = { ...next[idx], categoriesFound: next[idx].categoriesFound + newItems.length };
-                }
-                return { ...s, tasks: next };
-              });
             }
 
             setState(s => {
               const next = [...s.tasks];
               const idx = next.findIndex(t => t.id === task.id);
-              if (idx !== -1) {
-                next[idx] = { ...next[idx], status: 'completed', progressText: `Completed! Scanned ${totalChunks} parts.` };
-              }
+              if (idx !== -1) next[idx] = {
+                ...next[idx],
+                status: 'completed',
+                progressText: `✓ All ${totalBatches} batches complete — ${combinedNewCats.length} unique categories extracted from ${fmt(totalLen)} chars.`,
+                scanPercent: 100,
+              };
               return { ...s, tasks: next };
             });
 
           } else if (task.pdfData) {
-            // Iterative PDF extraction (since we can't chunk easily)
-            let keepExtracting = true;
-            let iteration = 1;
+            // ── PDF: page-range batches — deterministic full coverage + dedup ──
+            const estimatedPages = estimatePdfPageCount(task.pdfData.data);
+            const totalBatches   = Math.ceil(estimatedPages / PDF_BATCH_PGS);
             let combinedNewCats: Partial<Category>[] = [];
+            const runningNames: string[] = [...existingCategories.map(c => c.name)];
+            let consecutiveEmpty = 0;
 
-            while (keepExtracting) {
+            for (let batch = 0; batch < totalBatches; batch++) {
               if (taskStatusRef.current[task.id] !== 'extracting') return;
+              // Safety valve: 3 consecutive empty batches means document is exhausted
+              if (consecutiveEmpty >= 3) break;
 
-               setState(s => {
+              const pageStart = batch * PDF_BATCH_PGS + 1;
+              const pageEnd   = Math.min(estimatedPages, (batch + 1) * PDF_BATCH_PGS);
+              const pct       = Math.round((batch / totalBatches) * 100);
+
+              setState(s => {
                 const next = [...s.tasks];
                 const idx = next.findIndex(t => t.id === task.id);
-                if (idx !== -1) {
-                  next[idx] = { ...next[idx], progressText: `Scanning iteration ${iteration}...` };
-                }
+                if (idx !== -1) next[idx] = {
+                  ...next[idx],
+                  progressText: `Batch ${batch + 1}/${totalBatches} — pages ${pageStart}–${pageEnd} of ~${estimatedPages} (${pct}%)`,
+                  scanPercent: pct,
+                };
                 return { ...s, tasks: next };
               });
 
-              const newItems = await extractCategoriesFromText({
-                fileData: task.pdfData ? { data: task.pdfData.data, mimeType: task.pdfData.mimeType } : undefined,
-                existingCategoryNames: existingCategories.map(c => c.name).concat(combinedNewCats.map(c => c.name as string))
+              const rawItems = await extractCategoriesFromText({
+                fileData: { data: task.pdfData.data, mimeType: task.pdfData.mimeType },
+                existingCategoryNames: runningNames,
+                range: { currentPage: pageStart, endPage: pageEnd, totalPages: estimatedPages },
               });
 
-              if (newItems.length > 0) {
-                combinedNewCats = [...combinedNewCats, ...newItems];
-                onImport(newItems);
+              const uniqueItems = deduplicateIncoming(rawItems, runningNames);
+              uniqueItems.forEach(c => c.name && runningNames.push(c.name));
+
+              if (uniqueItems.length > 0) {
+                consecutiveEmpty = 0;
+                combinedNewCats = [...combinedNewCats, ...uniqueItems];
+                onImport(uniqueItems);
                 setState(s => {
                   const next = [...s.tasks];
                   const idx = next.findIndex(t => t.id === task.id);
-                  if (idx !== -1) {
-                    next[idx] = { ...next[idx], categoriesFound: next[idx].categoriesFound + newItems.length };
-                  }
+                  if (idx !== -1) next[idx] = { ...next[idx], categoriesFound: next[idx].categoriesFound + uniqueItems.length };
                   return { ...s, tasks: next };
                 });
-                iteration++;
               } else {
-                keepExtracting = false; // No more found
+                consecutiveEmpty++;
               }
             }
 
             setState(s => {
               const next = [...s.tasks];
               const idx = next.findIndex(t => t.id === task.id);
-              if (idx !== -1) {
-                next[idx] = { ...next[idx], status: 'completed', progressText: `Completed after ${iteration} iterations.` };
-              }
+              if (idx !== -1) next[idx] = {
+                ...next[idx],
+                status: 'completed',
+                progressText: `✓ ~${estimatedPages} pages scanned in ${totalBatches} batches — ${combinedNewCats.length} unique categories extracted.`,
+                scanPercent: 100,
+              };
               return { ...s, tasks: next };
             });
           }
@@ -436,9 +507,22 @@ export function ImportView({ onImport, state, setState, existingCategories }: Pr
                     </div>
                   </div>
 
-                  <div className="text-sm text-gray-400 font-medium">
+                  <div className="text-sm text-gray-400 font-medium font-mono">
                     {task.progressText}
                   </div>
+
+                  {/* Progress bar — visible while extracting and on completion */}
+                  {task.scanPercent !== undefined && (
+                    <div className="space-y-1">
+                      <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-500 ${task.status === 'completed' ? 'bg-emerald-500' : 'bg-orange-500'}`}
+                          style={{ width: `${task.scanPercent}%` }}
+                        />
+                      </div>
+                      <p className="text-[10px] text-gray-600 font-mono text-right">{task.scanPercent}% scanned</p>
+                    </div>
+                  )}
 
                   {task.error && (
                     <div className="text-xs text-rose-400 bg-rose-500/10 p-2 rounded border border-rose-500/20">

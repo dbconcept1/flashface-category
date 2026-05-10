@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Category, Weights, CategoryStatus } from './types';
+import { Category, Weights, CategoryStatus, BrandType, AwarenessLevel } from './types';
 import { INITIAL_CATEGORIES, INITIAL_WEIGHTS } from './data';
 import { DashboardView } from './views/DashboardView';
 import { CategoriesView } from './views/CategoriesView';
@@ -10,12 +10,15 @@ import { ExportView } from './views/ExportView';
 import { PromptsView } from './views/PromptsView';
 import { DiscoveryView } from './views/DiscoveryView';
 import { cn } from './utils';
-import { Target, LayoutGrid, BarChart2, Plus, Settings2, Sparkles, FileText, DownloadCloud, Loader2, Terminal, Radar, Menu, Activity, CheckCircle2, AlertCircle, Cloud } from 'lucide-react';
-import { agenticDeepResearchCategory, discoverDtcCategories, createInitialProgress } from './services/aiService';
+import { Target, LayoutGrid, BarChart2, Plus, Settings2, FileText, DownloadCloud, Loader2, Terminal, Radar, Menu, CheckCircle2, AlertCircle, Cloud, Euro, MessageSquare } from 'lucide-react';
+import { agenticDeepResearchCategory, discoverDtcCategories, createInitialProgress, CategoryResearchState } from './services/aiService';
 import stringSimilarity from 'string-similarity';
 import { lsLoadCategories, saveAllLayers, loadBestCategories } from './lib/db';
+import { SettingsView } from './views/SettingsView';
+import { ChatGPTView } from './views/ChatGPTView';
+import { getSettings, calcBudgetPercent } from './lib/settings';
 
-type ViewMode = 'dashboard' | 'categories' | 'comparison' | 'edit' | 'import' | 'export' | 'prompts' | 'discovery';
+type ViewMode = 'dashboard' | 'categories' | 'comparison' | 'edit' | 'import' | 'export' | 'prompts' | 'discovery' | 'settings' | 'chatgpt';
 
 export default function App() {
   // Layer 3 (localStorage) is the only synchronous source — used for instant first render.
@@ -35,7 +38,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState<ViewMode>('dashboard');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showWeightsMenu, setShowWeightsMenu] = useState(false);
-  const [enhancingIds, setEnhancingIds] = useState<Record<string, any>>({});
+  const [enhancingIds, setEnhancingIds] = useState<Record<string, CategoryResearchState>>({});
 
   const [importState, setImportState] = useState<{
     tasks: import('./views/ImportView').DocumentTask[];
@@ -45,6 +48,7 @@ export default function App() {
 
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isBulkResearching, setIsBulkResearching] = useState(false);
+  const [spendingRefresh, setSpendingRefresh] = useState(0);
   const [bulkStats, setBulkStats] = useState<{ total: number; done: number; failed: number } | null>(null);
   const [isMainSidebarOpen, setIsMainSidebarOpen] = useState(true);
   const [discoveryProgress, setDiscoveryProgress] = useState<import('./services/aiService').DiscoveryProgress | null>(null);
@@ -193,6 +197,7 @@ export default function App() {
     } finally {
       // Notify bulk queue tracker
       bulkCallbackRef.current?.(succeeded);
+      setSpendingRefresh(v => v + 1);
       // Auto-clear success state after 4s — errors persist until re-run
       if (succeeded) {
         setTimeout(() => {
@@ -397,11 +402,10 @@ export default function App() {
           monthlyConsumptionReason: e.monthlyConsumptionReason || '',
           acquisitionDifficulty: e.acquisitionDifficulty as any || 'Medium',
           emotionalLoyalty: e.emotionalLoyalty as any || 'Medium',
-          brandType: 'Digital' as any,
-          awarenessLevel: 'Solution Aware' as any,
+          brandType: 'Solution-based' as BrandType,
+          awarenessLevel: 'Problem-aware' as AwarenessLevel,
           storyDepth: e.storyDepth || 5,
           microNichePotential: e.microNichePotential || 5,
-          score: 0,
           status: 'Researching' as const,
           notes: e.notes || '',
           lastUpdated: new Date().toISOString()
@@ -423,24 +427,8 @@ export default function App() {
           isMainSidebarOpen ? "w-64" : "w-0 overflow-hidden border-none"
         )}>
           <div className="h-16 flex items-center px-6 border-b border-gray-900 w-64 shrink-0 justify-between">
-            <span className="font-extrabold tracking-widest text-[#FF1493] text-2xl drop-shadow-[2px_2px_0_#00FF00]">
-              <span className="text-[#FF1493] relative">
-                <span className="absolute -left-1 text-[#00FFFF] mix-blend-screen mix-blend-difference">F</span>
-                F
-              </span>
-              L
-              <span className="text-white relative">
-                <span className="absolute -left-0.5 text-[#00FFFF]">A</span>
-                <span className="absolute -left-1 text-[#FF1493]">A</span>
-                A
-              </span>
-              S
-              <span className="text-[#00FF00]">H</span>
-              F
-              <span className="text-white">A</span>
-              C
-              <span className="text-[#8A2BE2] relative drop-shadow-none">E</span>
-              <span className="sr-only">FLASHFACE</span>
+            <span className="font-extrabold tracking-wider text-xl">
+              <span className="text-orange-500">FLASH</span><span className="text-white">FACE</span>
             </span>
           </div>
 
@@ -486,6 +474,18 @@ export default function App() {
               label="AI Prompts" 
               active={currentView === 'prompts'} 
               onClick={() => setCurrentView('prompts')} 
+            />
+            <NavItem 
+              icon={<MessageSquare className="w-5 h-5" />} 
+              label="ChatGPT" 
+              active={currentView === 'chatgpt'} 
+              onClick={() => setCurrentView('chatgpt')} 
+            />
+            <NavItem 
+              icon={<Settings2 className="w-5 h-5" />} 
+              label="Settings" 
+              active={currentView === 'settings'} 
+              onClick={() => setCurrentView('settings')} 
             />
           </nav>
 
@@ -553,6 +553,30 @@ export default function App() {
                     )}
                   </div>
                 )}
+              {/* Spending pill */}
+              {(() => {
+                const s = getSettings();
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+                void spendingRefresh;
+                const pct = calcBudgetPercent(s);
+                if (s.spendingEur === 0 && s.budgetLimitEur === null) return null;
+                return (
+                  <button
+                    onClick={() => setCurrentView('settings')}
+                    title="API spending — click to open Settings"
+                    className={cn(
+                      "hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono border transition-colors",
+                      pct >= 100 ? "bg-rose-500/10 border-rose-500/25 text-rose-400" :
+                      pct >= 80  ? "bg-orange-500/10 border-orange-500/25 text-orange-400" :
+                                   "bg-gray-900 border-gray-800 text-gray-400 hover:text-gray-200"
+                    )}
+                  >
+                    <Euro className="w-3 h-3" />
+                    {s.spendingEur.toFixed(2)}
+                    {s.budgetLimitEur !== null && ` / €${s.budgetLimitEur}`}
+                  </button>
+                );
+              })()}
               {/* Save status + category count indicator */}
               <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-gray-900 border border-gray-800 rounded-lg text-xs font-mono">
                 <Cloud className="w-3 h-3 text-gray-500" />
@@ -614,12 +638,15 @@ export default function App() {
             )}
             {currentView === 'export' && <ExportView categories={categories} />}
             {currentView === 'prompts' && <PromptsView />}
+            {currentView === 'settings' && <SettingsView onRefreshSpending={() => setSpendingRefresh(v => v + 1)} />}
+            {currentView === 'chatgpt' && <ChatGPTView categories={categories} weights={weights} maxClv={maxClv} />}
             {currentView === 'edit' && (
               <EditCategoryView 
                 category={editingId ? categories.find(c => c.id === editingId) || null : null} 
                 onSave={handleSaveCategory}
                 onCancel={() => setCurrentView('categories')}
                 onDelete={handleDeleteCategory}
+                onSpendingChange={() => setSpendingRefresh(v => v + 1)}
                 onPartialUpdate={(partial) => {
                   if (!editingId) return;
                   setCategories(prev => prev.map(c =>

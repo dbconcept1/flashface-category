@@ -18,6 +18,14 @@ export interface Category {
   marketSizeGlobal?: string;
   marketSizeEU?: string;
   audienceSizeNL?: string;
+  /** TAM: total count of entities in NL that could ever be your customer */
+  tamNL?: number;
+  /** SAM: count after realistic reachability filters (social, digital, geography) */
+  samNL?: number;
+  /** SOM: count that can realistically buy given budget, need, and awareness */
+  somNL?: number;
+  /** Step-by-step funnel breakdown as readable text (each filter with source) */
+  funnelBreakdownNL?: string;
   regulatoryRiskNL?: 'Low' | 'Medium' | 'High';
   legalAndAdRestrictions?: string;
   marketSizeScore: number;
@@ -39,6 +47,8 @@ export interface Category {
     legalLogistics?: string;
     suppliersBudget?: string;
     foundersAndTeam?: string;
+    adIntelligence?: string;
+    retentionEngineering?: string;
   };
   notes: string;
   researchSources?: string[];

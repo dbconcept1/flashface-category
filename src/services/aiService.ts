@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Category } from "../types";
+import { getApiKey, checkBudget, recordApiUsage } from "../lib/settings";
 
 /** Retries a Gemini API call with exponential backoff on rate-limit / transient errors */
 async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
@@ -35,8 +36,17 @@ export interface ResearchProgress {
     legalLogistics: { status: AgentStatus; detail: string };
     suppliersBudget: { status: AgentStatus; detail: string };
     foundersAndTeam: { status: AgentStatus; detail: string };
+    adIntelligence: { status: AgentStatus; detail: string };
+    retentionEngineering: { status: AgentStatus; detail: string };
   };
 }
+
+/** State tracked per-category while research is in-flight or recently completed. */
+export type CategoryResearchState = ResearchProgress & {
+  /** queued = waiting in bulk queue | running = AI agents active | done = success | error = failed */
+  __state: 'queued' | 'running' | 'done' | 'error';
+  __error?: string;
+};
 
 export const createInitialProgress = (): ResearchProgress => ({
   overall: 'Initializing agentic swarm...',
@@ -48,6 +58,8 @@ export const createInitialProgress = (): ResearchProgress => ({
     legalLogistics: { status: 'pending', detail: 'Waiting to start...' },
     suppliersBudget: { status: 'pending', detail: 'Waiting to start...' },
     foundersAndTeam: { status: 'pending', detail: 'Waiting to start...' },
+    adIntelligence: { status: 'pending', detail: 'Waiting to start...' },
+    retentionEngineering: { status: 'pending', detail: 'Waiting to start...' },
   }
 });
 
@@ -63,14 +75,21 @@ export async function agenticDeepResearchCategory(
   onProgress: (progress: ResearchProgress) => void,
   onPartialUpdate?: (update: Partial<Category>) => void
 ): Promise<Partial<Category>> {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error("Missing GEMINI_API_KEY environment variable. Please configure it in the platform.");
-  }
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("No Gemini API key configured. Add your key in Settings.");
+  checkBudget();
 
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
   const modelName = "gemini-2.5-flash";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const safeGenerate = (params: any) => retryWithBackoff(() => ai.models.generateContent(params));
+  const safeGenerate = async (params: any) => {
+    checkBudget();
+    const response = await retryWithBackoff(() => ai.models.generateContent(params));
+    const meta = (response as any).usageMetadata;
+    const hasGrounding = Array.isArray(params.config?.tools) && params.config.tools.some((t: any) => 'googleSearch' in t);
+    recordApiUsage(meta?.promptTokenCount ?? 0, meta?.candidatesTokenCount ?? 0, hasGrounding ? 1 : 0);
+    return response;
+  };
   
   let currentProgress = createInitialProgress();
   const updateProgress = (updates: Partial<ResearchProgress>) => {
@@ -102,7 +121,20 @@ export async function agenticDeepResearchCategory(
         model: modelName,
         contents: `You are an expert e-commerce unit economics analyst. Deeply research the Customer Lifetime Value (CLV, in Euros) and Customer Acquisition Cost (CAC, in Euros) for the category: "${category.name}" targeting "${category.targetAudience}". Focus entirely on realistic European/NL metrics.
         ANTI-HALLUCINATION RULES: (1) Every CLV and CAC figure you return MUST be backed by a real URL found via search in this session. (2) If no real data can be found for this specific category, return 0 for that numeric field and explain why in markdownReport. A sourced zero is always more trustworthy than an invented figure. (3) Do not extrapolate from unrelated industries. (4) Populate the sources array with every URL you used — this is mandatory.
-        METHOD: Keep CLV and CAC completely separate in your logic. Search for "CAC [category name] e-commerce", "CLV [category name] subscription", site:reddit.com/r/marketing, filetype:pdf industry reports. Return a comprehensive breakdown with inline source citations.`,
+
+        MANDATORY SEARCHES — run ALL of these:
+        - "${category.name}" CLV "customer lifetime value" subscription e-commerce
+        - "${category.name}" CAC "customer acquisition cost" e-commerce 2025 2026
+        - "${category.name}" "average order value" subscription Netherlands EU
+        - site:rechargeapps.com blog "${category.name}" retention CLV
+        - site:recurly.com benchmark "${category.name}" subscription metrics
+        - site:chartmogul.com "${category.name}" revenue metrics
+        - "${category.name}" "ltv" OR "ltv:cac" benchmark filetype:pdf
+        - site:reddit.com/r/ecommerce "${category.name}" CAC OR CLV OR "lifetime value"
+        - "${category.name}" subscription ARPU "average revenue per user"
+        - "${category.name}" unit economics startup pitch deck investor
+
+        Keep CLV and CAC completely separate in your logic. Return a comprehensive breakdown with inline source citations.`,
         config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
       });
       updateAgent('unitEconomics', 'completed', 'Unit economics finalized.');
@@ -119,14 +151,18 @@ export async function agenticDeepResearchCategory(
     const schema = {
       type: Type.OBJECT,
       properties: {
-        markdownReport: { type: Type.STRING, description: "Detailed Markdown report showing market size, CAGR, trends." },
+        markdownReport: { type: Type.STRING, description: "Detailed Markdown report showing market size, CAGR, trends, and the full TAM→SAM→SOM funnel with every filter step numbered and sourced." },
         monthlyChurnPercent: { type: Type.NUMBER, description: "Estimated monthly churn percentage (0-100)" },
         cagr: { type: Type.STRING, description: "Estimated CAGR percentage over next 5 years" },
-        marketSizeGlobal: { type: Type.STRING, description: "Total Global Market Size" },
-        marketSizeEU: { type: Type.STRING, description: "Total European Market Size" },
-        marketSizeNL: { type: Type.STRING, description: "Total NL Market Size / Value" },
-        audienceSizeNL: { type: Type.STRING, description: "Highly realistic exact number of people in NL qualified. E.g. '15,000 users'" },
-        marketSizeScore: { type: Type.NUMBER, description: "Score from 1 to 10" },
+        marketSizeGlobal: { type: Type.STRING, description: "Total Global Market Size in euros/dollars with year" },
+        marketSizeEU: { type: Type.STRING, description: "Total European Market Size in euros with year" },
+        marketSizeNL: { type: Type.STRING, description: "Total NL Market Size / Value in euros with year" },
+        audienceSizeNL: { type: Type.STRING, description: "Human-readable SOM figure: '~12,400 reachable targets'" },
+        tamNL: { type: Type.NUMBER, description: "TAM: raw count of all entities in NL that could ever be a customer (integer). E.g. 100000 for all NL restaurants." },
+        samNL: { type: Type.NUMBER, description: "SAM: count after removing unreachable entities (no social presence, wrong region, offline-only, etc.). Must be <= TAM." },
+        somNL: { type: Type.NUMBER, description: "SOM: count that realistically can buy given budget, awareness, and operational capacity. Must be <= SAM. This is the number we actually target." },
+        funnelBreakdownNL: { type: Type.STRING, description: "Numbered step-by-step funnel. Each step: entity count → filter applied → remaining count → source URL. Example: '1. 100,000 restaurants in NL (CBS 2024) → 2. 52,000 with active social media (Newcom 2023, 52%) → 3. 18,000 with ≥€300/mo marketing budget (KVK SME survey 2023, 35%) → 4. 12,400 aware of/open to this product category (Eurobarometer 2024, 69%) = SOM 12,400'" },
+        marketSizeScore: { type: Type.NUMBER, description: "Score from 1 to 10 based on SOM size, growth rate, and competition density" },
         realMonthlyConsumption: { type: Type.BOOLEAN },
         monthlyConsumptionReason: { type: Type.STRING },
         acquisitionDifficulty: { type: Type.STRING, description: "Easy, Medium, or Hard" },
@@ -135,15 +171,50 @@ export async function agenticDeepResearchCategory(
         microNichePotential: { type: Type.NUMBER, description: "Score from 1 to 10" },
         sources: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of URLs or report names used for this research" }
       },
-      required: ["markdownReport", "monthlyChurnPercent", "marketSizeGlobal", "marketSizeEU", "marketSizeNL", "audienceSizeNL", "marketSizeScore", "realMonthlyConsumption", "monthlyConsumptionReason", "acquisitionDifficulty", "emotionalLoyalty", "storyDepth", "microNichePotential", "sources"]
+      required: ["markdownReport", "monthlyChurnPercent", "marketSizeGlobal", "marketSizeEU", "marketSizeNL", "audienceSizeNL", "tamNL", "samNL", "somNL", "funnelBreakdownNL", "marketSizeScore", "realMonthlyConsumption", "monthlyConsumptionReason", "acquisitionDifficulty", "emotionalLoyalty", "storyDepth", "microNichePotential", "sources"]
     };
     try {
       const response = await safeGenerate({
         model: modelName,
-        contents: `You are a European Consumer Market Researcher. Analyze the market for "${category.name}" targeted at "${category.targetAudience}". Provide a clear breakdown of market size globally, across Europe, and specifically in the Netherlands (NL). 
-        ANTI-HALLUCINATION RULES: (1) Every market size figure MUST cite a real source URL found via search. (2) If a figure cannot be sourced, return "Unknown (no source found)" — never fabricate a number. (3) Populate the sources array with every URL used — mandatory.
-        AUDIENCE SIZE: You MUST compute a strict TAM→SAM→SOM funnel for NL. Show each filter step: [Total NL 18M] → [Correct Age/Gender bracket from CBS.nl data] → [Online/e-commerce penetration for that bracket] → [% actually experiencing the specific problem]. Never skip steps. If CBS or government data is unavailable for a step, state that explicitly.
-        Focus on strict market size, realistic churn rates, consumer psychology (emotional loyalty, story depth), and niche potential. Return a detailed markdown report with your full TAM/SAM/SOM funnel, all fields, and sources list.`,
+        contents: `You are a European Consumer Market Researcher specialising in bottom-up market sizing for the Netherlands.
+
+CATEGORY: "${category.name}"
+TARGET: "${category.targetAudience}"
+
+═══════════════════════════════════════════════════════════
+MISSION — TAM → SAM → SOM FUNNEL (mandatory, numbered steps)
+═══════════════════════════════════════════════════════════
+You MUST compute a realistic, bottom-up funnel for the NL market.
+
+RULES:
+1. Start from the LARGEST countable population relevant to this category (CBS StatLine, KVK register, RVO, Newcom, etc.). Never start from "NL population 18M" unless the product genuinely targets all Dutch adults.
+2. Apply filters ONE AT A TIME. Each step must show:
+   • What you filtered on (e.g. "on social media", "SME with >€300/mo marketing budget")
+   • The % or absolute reduction
+   • A real source URL for the filter rate
+   • Remaining count
+3. TAM = after first meaningful outer boundary (entity type + country)
+4. SAM = after removing unreachable entities (offline, wrong region, competitor-locked, etc.)
+5. SOM = after removing those without budget, need, or operational readiness to buy YOUR product
+6. If a real source cannot be found for a filter rate, STATE that and use a conservative estimate marked "[estimated — no source found]"
+7. Integers only for tamNL, samNL, somNL. audienceSizeNL = human label e.g. "~12,400 reachable B2B targets"
+
+EXAMPLE FORMAT for funnelBreakdownNL:
+"1. 100,000 full-service restaurants in NL (KVK Handelsregister 2024) [TAM = 100,000]
+ → 2. −48,000 with no digital/online presence (Newcom Nationale Social Media Onderzoek 2024: 52% active) [remaining 52,000]
+ → 3. −34,000 with marketing budget <€200/mo (KVK MKB Barometer Q1 2024: 35% have ≥€200/mo) [remaining 18,200]
+ → 4. −5,800 already using a direct competitor (estimated 32%, no source found) [remaining 12,400]
+ [SOM = 12,400]"
+
+═══════════════════════════════════════════════════════════
+ANTI-HALLUCINATION RULES
+═══════════════════════════════════════════════════════════
+• Every figure MUST cite a real source URL found via live Google Search.
+• If a figure cannot be sourced, return "Unknown (no source found)" — NEVER fabricate.
+• Populate the sources array with every URL used — mandatory.
+• marketSizeNL, EU, Global: cite year; prefer official statistics or reputable industry reports.
+
+Return a detailed markdownReport covering: market size (global/EU/NL), CAGR, consumer psychology (loyalty, story depth), niche potential, and the full funnel. Include sources list.`,
         config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
       });
       updateAgent('marketDynamics', 'completed', 'Market dynamics mapped.');
@@ -169,8 +240,21 @@ export async function agenticDeepResearchCategory(
     try {
       const response = await safeGenerate({
         model: modelName,
-        contents: `You are a competitive intelligence operative. Search for and list local competitors in the Netherlands (or broader EU) selling: "${category.name}" to "${category.targetAudience}". Provide a bulleted list of 2-4 competitors, their estimated scale/traffic, pricing strategy, and positioning. Keep it intensely actionable. 
-        CRITICAL: Use advanced Google Search tricks (e.g. "intitle:review [competitor]"). Look for real companies. No placeholder names. Check real reviews and exact features. Return Markdown text and the sources you found.`,
+        contents: `You are a competitive intelligence operative. Search for and list local competitors in the Netherlands (or broader EU) selling: "${category.name}" to "${category.targetAudience}".
+
+        MANDATORY SEARCHES — run ALL of these:
+        - "${category.name}" subscription Netherlands OR "Nederland" webshop
+        - "${category.name}" site:trustpilot.com Netherlands reviews
+        - site:tweakers.net "${category.name}"
+        - site:retaildetail.nl "${category.name}"
+        - site:twinkle.nl "${category.name}" e-commerce
+        - "${category.name}" site:x.com Netherlands OR NL brand 2025
+        - "${category.name}" "Nederland" site:reddit.com community discussion
+        - "${category.name}" EU competitor DTC subscription brand 2025 2026
+        - intitle:review "${category.name}" Netherlands OR Belgian competitor
+        - "${category.name}" site:similarweb.com monthly visits NL competitor
+
+        For each of 2-4 real competitors: company name, URL, monthly traffic estimate (SimilarWeb), pricing, Trustpilot score, positioning angle, and key gap/weakness to exploit. Return Markdown text and all sources.`,
         config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
       });
       updateAgent('localCompetitors', 'completed', 'Local competition analyzed.');
@@ -195,8 +279,21 @@ export async function agenticDeepResearchCategory(
     try {
       const response = await safeGenerate({
         model: modelName,
-        contents: `You are a trend-spotter. Research the most successful global or US benchmarks/competitors for the category: "${category.name}" targeting "${category.targetAudience}". Identify exactly what makes the top 1 or 2 players globally successful. 
-        CRITICAL: Extract real breakdowns from X, LinkedIn, Reddit, or podcast transcripts (use Google Search with "transcript [company name]"). Identify exact stack and positioning. Return Markdown text and sources.`,
+        contents: `You are a 2026 DTC trend analyst and global competitive intelligence specialist. Research the most successful global players for: "${category.name}" targeting "${category.targetAudience}".
+
+        MANDATORY SEARCHES — run ALL of these:
+        - "${category.name}" DTC direct-to-consumer subscription US UK global top brand 2025 2026
+        - site:producthunt.com "${category.name}" — emerging players gaining traction
+        - site:crunchbase.com "${category.name}" DTC subscription funded recent
+        - site:explodingtopics.com "${category.name}" trend growth 2025
+        - "${category.name}" site:reddit.com/r/Entrepreneur OR site:reddit.com/r/startups success story
+        - "${category.name}" acquisition OR acqui-hire OR exit 2023 2024 2025
+        - "${category.name}" site:x.com founder thread scaling OR "${category.name}" founder story
+        - "${category.name}" YC batch OR Techstars OR accelerator cohort
+        - "${category.name}" Inc5000 OR Deloitte Fast500 fastest growing DTC
+        - "${category.name}" podcast interview founder scaling unit economics
+
+        Identify what makes the top 1-2 global players successful: exact growth channels, retention mechanics, product diff, unit economics. Extract from X, LinkedIn, Reddit, podcasts where found. Return Markdown text and all sources.`,
         config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
       });
       updateAgent('globalCompetitors', 'completed', 'Global benchmarks identified.');
@@ -250,8 +347,22 @@ export async function agenticDeepResearchCategory(
     try {
       const response = await safeGenerate({
         model: modelName,
-        contents: `You are a scrappy e-commerce founder and supply chain expert. For the category: "${category.name}", find out who the realistic suppliers are. Can we dropship it? How realistic is it to get this started on a very tight budget? What exactly is needed to launch the MVP? 
-        CRITICAL: Search Reddit (/r/Entrepreneur, /r/dropship), supplier hubs, and use Google Dorks (e.g. site:alibaba.com). Give real numbers and supplier names. Return Markdown text and sources.`,
+        contents: `You are a scrappy e-commerce founder and supply chain expert. For the category: "${category.name}", map every realistic supply chain option and startup cost for an NL-based DTC subscription launch.
+
+        MANDATORY SEARCHES — run ALL of these:
+        - site:alibaba.com "${category.name}" minimum order quantity white label
+        - site:1688.com "${category.name}" — direct Chinese factory pricing (lower MOQ than Alibaba)
+        - site:faire.com "${category.name}" — European/US wholesale marketplace
+        - site:ankorstore.com "${category.name}" — EU-focused wholesale, NL friendly
+        - site:thomasnet.com "${category.name}" manufacturer supplier
+        - "${category.name}" private label white label Netherlands Europe supplier
+        - "${category.name}" dropshipping supplier EU NL 2025 2026
+        - site:reddit.com/r/dropship "${category.name}" OR site:reddit.com/r/Entrepreneur "${category.name}" supplier experience
+        - "${category.name}" 3PL fulfillment center Netherlands PostNL DHL
+        - "${category.name}" COGs "cost of goods" subscription box benchmark
+        - "${category.name}" MOQ minimum order e-commerce startup
+
+        Provide: real supplier names, MOQ, unit cost, estimated COGs%, and a full MVP budget breakdown from €0 to 100 subscribers in NL. Flag supply chain risks. Return Markdown text and all sources.`,
         config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
       });
       updateAgent('suppliersBudget', 'completed', 'Suppliers and budget analyzed.');
@@ -259,6 +370,187 @@ export async function agenticDeepResearchCategory(
       return { raw: data.markdown || '', sources: data.sources || [] };
     } catch (e: any) {
       updateAgent('suppliersBudget', 'error', e.message);
+      return { raw: `Error: ${e.message}`, sources: [] };
+    }
+  };
+
+  const runAdIntelligenceAgent = async (): Promise<{ raw: string, sources: string[] }> => {
+    updateAgent('adIntelligence', 'running', 'Scanning Meta/TikTok ad library, CPM benchmarks, creative hooks...');
+    const schema = {
+      type: Type.OBJECT,
+      properties: {
+        markdown: { type: Type.STRING, description: "Full Markdown paid-media intelligence report structured by channel." },
+        sources: { type: Type.ARRAY, items: { type: Type.STRING } }
+      },
+      required: ["markdown", "sources"]
+    };
+    try {
+      const response = await safeGenerate({
+        model: modelName,
+        contents: `You are a 2026 DTC performance marketing specialist. Research the full paid media landscape for: "${category.name}" targeting "${category.targetAudience}" in the Netherlands.
+
+MANDATORY SEARCHES — run ALL of these:
+- site:facebook.com/ads/library "${category.name}" — active Meta ads targeting NL/EU
+- "${category.name}" Meta CPM Netherlands benchmark 2025 2026
+- "${category.name}" TikTok ads creative center top performing 2025 2026
+- "${category.name}" TikTok Shop creator affiliate
+- "${category.name}" influencer CAC micro-influencer ROAS Netherlands
+- "${category.name}" UGC creator ads performance conversion
+- "${category.name}" Google Shopping ROAS benchmark Netherlands 2025
+- "${category.name}" subscription ad creative hook examples
+- site:reddit.com/r/PPC "${category.name}" OR site:reddit.com/r/FacebookAds "${category.name}"
+- "${category.name}" affiliate program commission rate Netherlands
+- "${category.name}" Performance Max Google 2025 2026
+- "${category.name}" Nederlandse influencer samenwerking OR NL creator partnership
+- "${category.name}" ad fatigue creative refresh cycle subscription
+
+REPORT FORMAT (use exactly this structure):
+
+## Channel CAC Breakdown
+| Channel | Estimated CAC (NL) | Confidence | Source |
+|---------|-------------------|------------|--------|
+| Meta (FB/IG) | | | |
+| TikTok | | | |
+| Google Search | | | |
+| Google Shopping | | | |
+| Influencer/UGC | | | |
+| Affiliate | | | |
+
+## Meta (Facebook/Instagram)
+- CPM range NL (€): …
+- Typical CTR: …
+- Best-performing creative angles: …
+- Ad restrictions for this category (health claims, etc.): …
+- Winning ad formats in 2026 (UGC, VSL, static, carousel): …
+
+## TikTok
+- TikTok Shop presence for this category (yes/no/emerging): …
+- Top creative hooks/styles that convert: …
+- CPM range NL (€): …
+- UGC vs produced content split: …
+- Key creators or niches to target: …
+
+## Google (Search + Shopping + PMAX)
+- CPC ranges NL (€): …
+- ROAS benchmarks: …
+- Best keyword intent clusters: …
+- PMAX vs Search split recommendation: …
+
+## Influencer & UGC Economy
+- Nano/micro/macro split recommendation: …
+- Typical CPR (cost per result) via influencer: …
+- Platforms that convert best for this category: …
+- Average engagement rate benchmarks: …
+
+## 2026-Specific Opportunities
+New platform features (Meta AI ads, TikTok Shop Live, YouTube Shopping, Pinterest Shopping, WhatsApp Business NL) and creative formats emerging for this category.
+
+## Creative Strategy Playbook
+Top 3-5 proven hooks/angles with evidence from search. What emotional triggers drive conversions in this category?
+
+ANTI-HALLUCINATION: All CPM/CPC/ROAS/CAC figures must trace to a real source URL from this session. If a benchmark cannot be verified, write "No verified benchmark found — industry proxy: [X], treat as estimate". Never invent figures.`,
+        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+      });
+      updateAgent('adIntelligence', 'completed', 'Ad intelligence mapped.');
+      const data = JSON.parse(response.text?.trim() || "{}");
+      return { raw: data.markdown || '', sources: data.sources || [] };
+    } catch (e: any) {
+      updateAgent('adIntelligence', 'error', e.message);
+      return { raw: `Error: ${e.message}`, sources: [] };
+    }
+  };
+
+  const runRetentionEngineeringAgent = async (): Promise<{ raw: string, sources: string[] }> => {
+    updateAgent('retentionEngineering', 'running', 'Mapping cohort retention, churn drivers, subscription term economics...');
+    const schema = {
+      type: Type.OBJECT,
+      properties: {
+        markdown: { type: Type.STRING, description: "Full Markdown retention engineering report with benchmarks, playbooks, and 2026 tactics." },
+        sources: { type: Type.ARRAY, items: { type: Type.STRING } }
+      },
+      required: ["markdown", "sources"]
+    };
+    try {
+      const response = await safeGenerate({
+        model: modelName,
+        contents: `You are a subscription retention engineer and DTC growth expert. Research cohort economics and retention for: "${category.name}" targeting "${category.targetAudience}".
+
+MANDATORY SEARCHES — run ALL of these:
+- "${category.name}" subscription retention benchmark 2025 2026
+- site:rechargeapps.com blog "${category.name}" subscription retention
+- site:recurly.com benchmark churn "${category.name}"
+- site:chartmogul.com "${category.name}" subscription metrics
+- "${category.name}" "3-month retention" OR "6-month retention" OR "12-month retention" cohort
+- "${category.name}" subscription annual vs monthly conversion rate uplift
+- "${category.name}" subscription pause rate cancel rate
+- "${category.name}" win-back campaign reactivation rate email
+- "${category.name}" subscriber NPS benchmark
+- "${category.name}" dunning management failed payment recovery rate
+- "${category.name}" referral program LTV uplift loyalty program
+- site:reddit.com/r/ecommerce "${category.name}" retention churn
+- "${category.name}" subscription box cohort analysis
+- subscription business benchmark 2025 involuntary churn failed payment
+- "${category.name}" cancellation survey top reasons
+
+REPORT FORMAT (exact structure):
+
+## Retention Benchmark Summary
+| Metric | This Category (found/estimated) | Source | Confidence |
+|--------|---------------------------------|--------|-----------|
+| Month-1 retention | | | |
+| Month-3 retention | | | |
+| Month-6 retention | | | |
+| Month-12 retention | | | |
+| Steady-state monthly churn | | | |
+| Target <6% churn feasible? | | | |
+
+## Subscription Term Mix Engineering
+- % of subscribers on annual plans (benchmark + source)
+- Optimal annual discount for this category (% off that maximizes net revenue while boosting LTV)
+- Free trial vs paid trial: which converts better and why
+- Prepaid bundles (3/6/12 month) — measured LTV uplift vs monthly
+
+## Top 5 Churn Drivers (ranked by frequency)
+From customer surveys, Reddit, review analysis, or cancellation studies found via search.
+
+## Pause Rate vs Cancel Rate
+- Does a subscription pause feature reduce cancellations in this space?
+- % of "cancel" attempts that convert to pause when offered
+- Reactivation rate from paused vs hard-cancelled subscribers
+
+## Win-Back / Reactivation Playbook
+- Industry average win-back rate for this category
+- Top reactivation channels (email, SMS, paid retargeting) with conversion benchmarks
+- Typical discount depth needed to win back a cancelled subscriber
+- Optimal timing for win-back sequence (day 1, 7, 30, 60, 90?)
+
+## Dunning & Involuntary Churn Defense
+- Industry average involuntary churn from failed payments for this category
+- Smart retry logic improvement (3-day, 7-day retry window)
+- Account updater service impact on recovery rate
+- Pre-dunning SMS/email nudge benchmarks
+
+## Referral & Loyalty Program Economics
+- Average LTV uplift % for referral-acquired subscribers vs paid-ad acquired
+- Best loyalty mechanics for this category (points, tiers, early access, co-creation)
+- Net revenue retention uplift when a loyalty program is active
+
+## 2026-Specific Retention Tactics
+- AI-personalized subscription curation for this category
+- Community-driven retention (Discord, WhatsApp groups, member events)
+- Co-creation / subscriber input into product selection
+- "Pause, don't cancel" UX flows — conversion rates
+- Personalized win-back video or handwritten note programs
+- Hyperlocal NL tactics (PostNL partnerships, iDEAL billing retry, etc.)
+
+ANTI-HALLUCINATION: Every percentage must cite a real source URL from this session. If no specific data found for this category, cite nearest adjacent category and clearly label as proxy "[adjacent category proxy — no direct source found]".`,
+        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+      });
+      updateAgent('retentionEngineering', 'completed', 'Retention engineering report complete.');
+      const data = JSON.parse(response.text?.trim() || "{}");
+      return { raw: data.markdown || '', sources: data.sources || [] };
+    } catch (e: any) {
+      updateAgent('retentionEngineering', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
     }
   };
@@ -318,14 +610,18 @@ export async function agenticDeepResearchCategory(
     });
   }
 
-  updateProgress({ overall: 'Running Global Competitors + Suppliers & Budget in parallel...' });
-  const [globalNotes, suppliersBudget] = await Promise.all([
+  updateProgress({ overall: 'Running Global Competitors + Suppliers + Ad Intelligence in parallel...' });
+  const [globalNotes, suppliersBudget, adIntel] = await Promise.all([
     runGlobalCompetitorsAgent(),
     runSuppliersBudgetAgent(),
+    runAdIntelligenceAgent(),
   ]);
 
-  updateProgress({ overall: 'Running Founders & Team...' });
-  const foundersAndTeam = await runFoundersTeamAgent();
+  updateProgress({ overall: 'Running Founders & Team + Retention Engineering in parallel...' });
+  const [foundersAndTeam, retentionEng] = await Promise.all([
+    runFoundersTeamAgent(),
+    runRetentionEngineeringAgent(),
+  ]);
 
   updateProgress({ overall: 'Merging intelligence reports...' });
 
@@ -336,7 +632,9 @@ export async function agenticDeepResearchCategory(
     ...(localNotes.sources || []),
     ...(globalNotes.sources || []),
     ...(suppliersBudget.sources || []),
-    ...(foundersAndTeam.sources || [])
+    ...(foundersAndTeam.sources || []),
+    ...(adIntel.sources || []),
+    ...(retentionEng.sources || []),
   ];
 
   updateProgress({ overall: 'Research complete.' });
@@ -353,6 +651,8 @@ export async function agenticDeepResearchCategory(
        legalLogistics: legalLog.raw,
        suppliersBudget: suppliersBudget.raw,
        foundersAndTeam: foundersAndTeam.raw,
+       adIntelligence: adIntel.raw,
+       retentionEngineering: retentionEng.raw,
     },
     researchSources: [...new Set([...(category.researchSources || []), ...allSources])],
     lastUpdated: new Date().toISOString()
@@ -366,13 +666,20 @@ export async function discoverDtcCategories(
   onCategoryDiscovered: (cat: Partial<Category>) => void,
   signal: AbortSignal
 ): Promise<void> {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error("Missing GEMINI_API_KEY.");
-  }
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("No Gemini API key configured. Add your key in Settings.");
+  checkBudget();
+  const ai = new GoogleGenAI({ apiKey });
   const modelName = "gemini-2.5-flash";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const safeGenerate = (params: any) => retryWithBackoff(() => ai.models.generateContent(params));
+  const safeGenerate = async (params: any) => {
+    checkBudget();
+    const response = await retryWithBackoff(() => ai.models.generateContent(params));
+    const meta = (response as any).usageMetadata;
+    const hasGrounding = Array.isArray(params.config?.tools) && params.config.tools.some((t: any) => 'googleSearch' in t);
+    recordApiUsage(meta?.promptTokenCount ?? 0, meta?.candidatesTokenCount ?? 0, hasGrounding ? 1 : 0);
+    return response;
+  };
 
   let progress: DiscoveryProgress = {
     status: "Initializing Endless Global Sector Mapper...",
@@ -485,7 +792,7 @@ export async function discoverDtcCategories(
 
         const prompt = `${userPrompt}\n\n${existingInfo}YOUR MISSION NOW: Deep-dive specifically into the sector: "${sector}". Discover 2 to 4 HYPER-SPECIFIC, highly profitable micro-categories within this sector that fit all constraints.\n\nCRITICAL ANTI-HALLUCINATION CONSTRAINTS:\n1. DO NOT INVENT categories. Only suggest categories that have REAL, NAMED, OPERATIONAL businesses already serving them. Use Google Search to verify each one before including it.\n2. For EVERY category you return, you MUST include at least one real URL in the sources array (a live business homepage, a market report, a Reddit thread) that proves this niche exists with real demand. Categories without a verifiable source MUST be excluded.\n3. For "audienceSizeNL": output a brutally realistic number (e.g. "12,500 people") and show your full TAM→SAM→SOM funnel in notes with each filter step. Never skip steps.\n4. TAM/SAM/SOM reduction: [Total NL 18M] → [Correct Age/Gender] → [Income Bracket] → [% experiencing the exact problem]. Use census or CBS.nl data where possible.\n5. If a statistic (CLV, CAC, churn) cannot be found via search, output 0 — a sourced zero is more trustworthy than an invented number.`;
 
-        const response = await ai.models.generateContent({
+        const response = await safeGenerate({
           model: modelName,
           contents: prompt,
           config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } }
@@ -526,14 +833,20 @@ export async function extractCompanyFromImage(
   input: { imageData: string; mimeType: string; existingCategoryNames?: string[] },
   onProgress?: (status: string) => void
 ): Promise<{ categoryParams: Partial<Category>, rawResearch: string, sources: string[] } | null> {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error("Missing GEMINI_API_KEY.");
-  }
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("No Gemini API key configured. Add your key in Settings.");
 
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
   const modelName = "gemini-2.5-flash";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const go = (params: any) => retryWithBackoff(() => ai.models.generateContent(params));
+  const go = async (params: any) => {
+    checkBudget();
+    const response = await retryWithBackoff(() => ai.models.generateContent(params));
+    const meta = (response as any).usageMetadata;
+    const hasGrounding = Array.isArray(params.config?.tools) && params.config.tools.some((t: any) => 'googleSearch' in t);
+    recordApiUsage(meta?.promptTokenCount ?? 0, meta?.candidatesTokenCount ?? 0, hasGrounding ? 1 : 0);
+    return response;
+  };
   const report = (msg: string) => onProgress?.(msg);
 
   // ─── PASS 1: Brand Identification + Full Website Scan ─────────────────────
@@ -867,14 +1180,22 @@ export interface ExtractionRange {
 }
 
 export async function extractCategoriesFromText(input: { text?: string; fileData?: { mimeType: string; data: string }; existingCategoryNames?: string[]; range?: ExtractionRange }): Promise<Partial<Category>[]> {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error("Missing GEMINI_API_KEY environment variable. Please configure it in the platform.");
-  }
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("No Gemini API key configured. Add your key in Settings.");
 
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
   const modelName = "gemini-2.5-flash";
 
-  
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const safeGenerate = async (params: any) => {
+    checkBudget();
+    const response = await retryWithBackoff(() => ai.models.generateContent(params));
+    const meta = (response as any).usageMetadata;
+    const hasGrounding = Array.isArray(params.config?.tools) && params.config.tools.some((t: any) => 'googleSearch' in t);
+    recordApiUsage(meta?.promptTokenCount ?? 0, meta?.candidatesTokenCount ?? 0, hasGrounding ? 1 : 0);
+    return response;
+  };
+
   const schema = {
     type: Type.OBJECT,
     properties: {
@@ -922,7 +1243,7 @@ export async function extractCategoriesFromText(input: { text?: string; fileData
     });
   }
 
-  const response = await ai.models.generateContent({
+  const response = await safeGenerate({
     model: modelName,
     contents,
     config: {

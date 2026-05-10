@@ -92,7 +92,7 @@ export function DashboardView({ categories, weights, maxClv }: Props) {
           <div className="bg-[#111111] border border-gray-800 rounded-xl overflow-hidden">
              <table className="w-full text-left border-collapse text-sm">
                 <thead>
-                  <tr className="bg-gray-900/50 border-b border-gray-800 text-[10px] uppercase tracking-widest text-gray-500">
+                  <tr className="bg-gray-900/50 border-b border-gray-800 text-xs uppercase tracking-widest text-gray-500">
                     <th className="py-3 px-4 font-normal">Category</th>
                     <th className="py-3 px-4 font-normal text-right cursor-help" title="Lifetime Value to Customer Acquisition Cost Ratio">LTV:CAC</th>
                     <th className="py-3 px-4 font-normal text-right cursor-help" title="Algorithmic Decision Score">Score</th>
@@ -103,7 +103,7 @@ export function DashboardView({ categories, weights, maxClv }: Props) {
                     <tr key={cat.id} className="hover:bg-gray-800/20 transition-colors">
                       <td className="py-3 px-4">
                         <div className="flex items-center space-x-3">
-                          <span className="text-xs text-gray-600 font-mono font-bold w-4">{i + 1}.</span>
+                          <span className="text-xs text-gray-500 font-mono font-bold w-4">{i + 1}.</span>
                           <span className="font-semibold text-gray-200">{cat.name}</span>
                         </div>
                       </td>
@@ -138,7 +138,7 @@ export function DashboardView({ categories, weights, maxClv }: Props) {
 function KpiCell({ label, value, highlight, mono, tooltip }: { label: string, value: string, highlight?: boolean, mono?: boolean, tooltip?: string }) {
   return (
     <div className="px-6 py-4 flex flex-col justify-center cursor-help" title={tooltip}>
-      <p className="text-[10px] max-w-[120px] uppercase tracking-widest text-gray-500 mb-1">{label}</p>
+      <p className="text-xs max-w-[120px] uppercase tracking-widest text-gray-500 mb-1">{label}</p>
       <p className={`text-2xl font-bold ${mono ? 'font-mono tracking-tight' : ''} ${highlight ? 'text-emerald-400' : 'text-white'}`}>
         {value}
       </p>
