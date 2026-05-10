@@ -22,6 +22,7 @@
 
 import LZString from 'lz-string';
 import type { Category } from '../types';
+import { getSettings } from './settings';
 
 // ─── Layer 1: Server file API ─────────────────────────────────────────────────
 
@@ -69,6 +70,152 @@ export async function isApiAvailable(): Promise<boolean> {
     _apiAvailable = false;
   }
   return _apiAvailable;
+}
+
+// ─── Layer 0: GitHub repository (most durable — survives Codespace rebuilds) ──
+//
+// Uses the GitHub Contents API to commit categories.json directly to the repo.
+// Every save becomes a git commit — full rollback history, zero infrastructure.
+// Saves are debounced (8s) so rapid edits don't spam commits.
+// Falls back gracefully when no token is configured.
+
+const GH_OWNER = 'dbconcept1';
+const GH_REPO  = 'flashface-category';
+const GH_PATH  = 'categories.json';
+const GH_BRANCH = 'main';
+const GH_API   = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${GH_PATH}`;
+/** Cached file SHA — required by GitHub API to update an existing file. */
+const GH_SHA_KEY   = 'flashface_gh_sha';
+/** Epoch (timestamp) of last confirmed GitHub save — used in layer comparison. */
+const GH_EPOCH_KEY = 'flashface_gh_epoch';
+
+function getGithubToken(): string {
+  return getSettings().githubToken || '';
+}
+
+/** Encode a UTF-8 string to base64 (browser-safe). */
+function b64encode(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  const binStr = Array.from(bytes, (b) => String.fromCodePoint(b)).join('');
+  return btoa(binStr);
+}
+
+/** Decode a base64 string to UTF-8 (browser-safe). */
+function b64decode(b64: string): string {
+  const binStr = atob(b64.replace(/\s/g, ''));
+  const bytes = Uint8Array.from(binStr, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+export async function githubLoadCategories(): Promise<Category[]> {
+  const token = getGithubToken();
+  if (!token) return [];
+  try {
+    const res = await fetch(GH_API, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      cache: 'no-store',
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    // Cache SHA so next save can skip the extra GET round-trip
+    if (json.sha) localStorage.setItem(GH_SHA_KEY, json.sha);
+    const data = JSON.parse(b64decode(json.content));
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function githubSaveCategories(categories: Category[]): Promise<boolean> {
+  const token = getGithubToken();
+  if (!token) return false;
+
+  const content = b64encode(JSON.stringify(categories, null, 2));
+  const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
+
+  const buildPayload = (sha?: string) => JSON.stringify({
+    message: `data: sync ${categories.length} categories [${ts}]`,
+    content,
+    branch: GH_BRANCH,
+    ...(sha ? { sha } : {}),
+  });
+
+  const doPut = (sha?: string) => fetch(GH_API, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'Content-Type': 'application/json',
+    },
+    body: buildPayload(sha),
+  });
+
+  try {
+    const cachedSha = localStorage.getItem(GH_SHA_KEY) || undefined;
+    let res = await doPut(cachedSha);
+
+    // 409 = SHA conflict (stale cached SHA) — re-fetch and retry once
+    if (res.status === 409 || res.status === 422) {
+      const getRes = await fetch(GH_API, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+        cache: 'no-store',
+      });
+      if (!getRes.ok) return false;
+      const meta = await getRes.json();
+      if (meta.sha) localStorage.setItem(GH_SHA_KEY, meta.sha);
+      res = await doPut(meta.sha);
+    }
+
+    if (res.ok) {
+      const data = await res.json();
+      // Cache the fresh SHA returned by the commit so next save skips the GET
+      const newSha = data?.content?.sha;
+      if (newSha) localStorage.setItem(GH_SHA_KEY, newSha);
+      localStorage.setItem(GH_EPOCH_KEY, Date.now().toString());
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// Debounce state — at most one GitHub commit per 8 seconds during rapid editing
+let _ghTimer: ReturnType<typeof setTimeout> | null = null;
+let _ghPending: Category[] | null = null;
+
+function scheduleGithubSave(categories: Category[]): void {
+  _ghPending = categories;
+  if (_ghTimer) clearTimeout(_ghTimer);
+  _ghTimer = setTimeout(() => {
+    _ghTimer = null;
+    const toSave = _ghPending;
+    _ghPending = null;
+    if (toSave) githubSaveCategories(toSave); // fire and forget
+  }, 8_000);
+}
+
+/**
+ * Flush any pending debounced GitHub save immediately.
+ * Call this in beforeunload so the final state is always committed.
+ */
+export function flushGithubSave(): void {
+  if (_ghTimer) {
+    clearTimeout(_ghTimer);
+    _ghTimer = null;
+  }
+  const toSave = _ghPending;
+  _ghPending = null;
+  if (toSave) githubSaveCategories(toSave); // fire and forget
 }
 
 // ─── Layer 2: IndexedDB ────────────────────────────────────────────────────────
@@ -181,6 +328,9 @@ export async function saveAllLayers(categories: Category[]): Promise<{ api: bool
     apiSaveCategories(categories),
   ]);
 
+  // Layer 0: GitHub — debounced, runs in background, does not block UI
+  scheduleGithubSave(categories);
+
   return { idb: idbResult as boolean, api: apiResult };
 }
 
@@ -204,19 +354,22 @@ export async function saveAllLayers(categories: Category[]): Promise<{ api: bool
  * a category and localStorage has the deletion, it won't be restored from IDB/server.
  */
 export async function loadBestCategories(): Promise<{ categories: Category[]; source: string }> {
-  const [[idbCats, idbEpoch], apiCats] = await Promise.all([
+  const [[idbCats, idbEpoch], apiCats, ghCats] = await Promise.all([
     Promise.all([idbLoadCategories(), idbGetEpoch()]),
     apiLoadCategories(),
+    githubLoadCategories(),
   ]);
   const lsCats = lsLoadCategories();
 
   const lsEpoch  = parseInt(localStorage.getItem(LS_EPOCH_KEY)  || '0');
   const apiEpoch = parseInt(localStorage.getItem(API_EPOCH_KEY) || '0');
+  const ghEpoch  = parseInt(localStorage.getItem(GH_EPOCH_KEY)  || '0');
 
   const layers: { cats: Category[]; label: string; epoch: number }[] = [
     { cats: lsCats,  label: 'localStorage', epoch: lsEpoch  },
     { cats: idbCats, label: 'IndexedDB',    epoch: idbEpoch },
     { cats: apiCats, label: 'server-file',  epoch: apiEpoch },
+    { cats: ghCats,  label: 'GitHub',       epoch: ghEpoch  },
   ];
 
   // Phase 1: pick primary layer by newest epoch (tiebreak: count)
@@ -248,6 +401,9 @@ export async function loadBestCategories(): Promise<{ categories: Category[]; so
   if (apiEpoch < bestEpoch || apiCats.length !== merged.length)  apiSaveCategories(merged);
   if (idbEpoch < bestEpoch || idbCats.length !== merged.length)  idbSaveCategories(merged);
   if (lsEpoch  < bestEpoch || lsCats.length  !== merged.length)  lsSaveCategories(merged);
+  // Re-sync GitHub immediately (not debounced) if it's lagging — ensures
+  // the repo stays up-to-date on Codespace startup after a rebuild.
+  if (ghEpoch < bestEpoch || ghCats.length !== merged.length)    githubSaveCategories(merged);
 
   return { categories: merged, source: primary.label };
 }

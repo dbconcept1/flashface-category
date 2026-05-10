@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Key, Eye, EyeOff, Euro, AlertTriangle, CheckCircle2, Info, RotateCcw, ExternalLink } from 'lucide-react';
+import { Key, Eye, EyeOff, Euro, AlertTriangle, CheckCircle2, Info, RotateCcw, ExternalLink, GitBranch } from 'lucide-react';
 import { getSettings, saveSettings, resetSpending, AppSettings, PRICING_EUR, calcBudgetPercent } from '../lib/settings';
 import { cn } from '../utils';
 
@@ -46,6 +46,31 @@ export function SettingsView({ onRefreshSpending }: { onRefreshSpending?: () => 
     update({ openaiApiKey: '' });
     setIsEditingOpenaiKey(false);
     setOpenaiKeyInput('');
+  };
+
+  // GitHub token section
+  const [ghTokenInput, setGhTokenInput] = useState('');
+  const [isEditingGhToken, setIsEditingGhToken] = useState(false);
+  const [showGhToken, setShowGhToken] = useState(false);
+  const [ghTokenSaved, setGhTokenSaved] = useState(false);
+
+  const hasGhToken = !!settings.githubToken;
+
+  const handleSaveGhToken = () => {
+    const trimmed = ghTokenInput.trim();
+    if (!trimmed) return;
+    update({ githubToken: trimmed });
+    setIsEditingGhToken(false);
+    setGhTokenInput('');
+    setGhTokenSaved(true);
+    setTimeout(() => setGhTokenSaved(false), 3000);
+  };
+
+  const handleRemoveGhToken = () => {
+    if (!confirm('Remove the GitHub token? Categories will no longer auto-commit to the repo.')) return;
+    update({ githubToken: '' });
+    setIsEditingGhToken(false);
+    setGhTokenInput('');
   };
 
   // Gemini key section
@@ -300,6 +325,108 @@ export function SettingsView({ onRefreshSpending }: { onRefreshSpending?: () => 
             <span className="text-blue-400 font-mono">platform.openai.com/api-keys</span>.
             Stored only in your browser’s localStorage.
           </span>
+        </div>
+      </section>
+      {/* ─── GitHub Auto-Backup ──────────────────────── */}
+      <section className="bg-[#111111] border border-gray-800 rounded-2xl p-6 space-y-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <GitBranch className="w-4 h-4 text-emerald-400 shrink-0" />
+          <h3 className="text-sm font-bold text-white uppercase tracking-widest">GitHub Auto-Backup</h3>
+          <span className={cn(
+            'ml-auto text-[10px] font-mono px-2 py-0.5 rounded border uppercase tracking-wider',
+            hasGhToken
+              ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+              : 'text-gray-500 bg-gray-800/50 border-gray-700'
+          )}>
+            {hasGhToken ? '✓ Active — commits every 8s' : '✕ Not configured'}
+          </span>
+        </div>
+
+        {!isEditingGhToken ? (
+          <div className="flex gap-2">
+            <div className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-sm font-mono text-gray-500 flex items-center">
+              {hasGhToken ? '••••••••••••••••••••••••' : 'No token set'}
+            </div>
+            <button
+              onClick={() => { setIsEditingGhToken(true); setGhTokenInput(''); setShowGhToken(false); }}
+              className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-sm font-bold transition-colors"
+            >
+              {hasGhToken ? 'Change' : 'Add Token'}
+            </button>
+            {hasGhToken && (
+              <button
+                onClick={handleRemoveGhToken}
+                className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-rose-400 rounded-lg text-sm transition-colors"
+                title="Remove token"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <input
+                  // eslint-disable-next-line jsx-a11y/no-autofocus
+                  autoFocus
+                  type={showGhToken ? 'text' : 'password'}
+                  value={ghTokenInput}
+                  onChange={e => setGhTokenInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleSaveGhToken()}
+                  placeholder="github_pat_..."
+                  className="w-full bg-gray-900 border border-emerald-500/50 text-white rounded-lg px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 pr-10"
+                />
+                <button
+                  onClick={() => setShowGhToken(v => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                  tabIndex={-1}
+                >
+                  {showGhToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <button
+                onClick={handleSaveGhToken}
+                disabled={!ghTokenInput.trim()}
+                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-sm font-bold transition-colors disabled:opacity-40"
+              >
+                Save
+              </button>
+              <button
+                onClick={() => { setIsEditingGhToken(false); setGhTokenInput(''); }}
+                className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded-lg text-sm transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {ghTokenSaved && (
+          <div className="flex items-center gap-2 text-xs text-emerald-400">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            Token saved — categories will now auto-commit to GitHub after every change
+          </div>
+        )}
+
+        <div className="flex items-start gap-2 bg-emerald-500/5 border border-emerald-500/15 rounded-lg px-4 py-3 text-xs text-gray-400 space-y-1">
+          <Info className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+          <div className="space-y-2">
+            <p>
+              Every change you make is automatically committed to{' '}
+              <span className="text-emerald-400 font-mono">dbconcept1/flashface-category</span>{' '}
+              as a real git commit. This means your data survives Codespace rebuilds, browser wipes, and anything else.
+            </p>
+            <p className="text-gray-500">
+              <span className="text-white font-semibold">How to get a token:</span>{' '}
+              Go to{' '}
+              <span className="text-blue-400 font-mono">github.com/settings/tokens</span>{' '}
+              → Generate new token (fine-grained) → select the{' '}
+              <span className="font-mono text-gray-300">flashface-category</span> repo → enable{' '}
+              <span className="font-mono text-gray-300">Contents: Read and write</span>. That's it.
+            </p>
+            <p className="text-gray-600">Token is stored only in your browser's localStorage. Never committed to code.</p>
+          </div>
         </div>
       </section>
       {/* ─── Budget / Spending ───────────────────────── */}

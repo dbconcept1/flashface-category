@@ -51,11 +51,11 @@ export function EditCategoryView({ category, onSave, onCancel, onDelete, onParti
   const [formData, setFormData] = useState<Partial<Category>>(category || defaultCategory);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhancingStatus, setEnhancingStatus] = useState<ResearchProgress | null>(null);
-  const [activeTab, setActiveTab] = useState<'unitEconomics' | 'marketDynamics' | 'localCompetitors' | 'globalCompetitors' | 'foundersAndTeam' | 'legalLogistics' | 'suppliersBudget' | 'adIntelligence' | 'retentionEngineering'>(() => {
+  const [activeTab, setActiveTab] = useState<'unitEconomics' | 'marketDynamics' | 'localCompetitors' | 'globalCompetitors' | 'foundersAndTeam' | 'legalLogistics' | 'suppliersBudget' | 'adIntelligence' | 'retentionEngineering' | 'searchTrends'>(() => {
     if (!category || !category.agentResults) return 'unitEconomics';
-    const keys: Array<'unitEconomics' | 'marketDynamics' | 'localCompetitors' | 'globalCompetitors' | 'foundersAndTeam' | 'legalLogistics' | 'suppliersBudget' | 'adIntelligence' | 'retentionEngineering'> = [
+    const keys: Array<'unitEconomics' | 'marketDynamics' | 'localCompetitors' | 'globalCompetitors' | 'foundersAndTeam' | 'legalLogistics' | 'suppliersBudget' | 'adIntelligence' | 'retentionEngineering' | 'searchTrends'> = [
       'unitEconomics', 'marketDynamics', 'localCompetitors', 'globalCompetitors', 
-      'foundersAndTeam', 'legalLogistics', 'suppliersBudget', 'adIntelligence', 'retentionEngineering'
+      'foundersAndTeam', 'legalLogistics', 'suppliersBudget', 'adIntelligence', 'retentionEngineering', 'searchTrends'
     ];
     for (const k of keys) {
       if (category.agentResults[k]) return k;
@@ -605,7 +605,8 @@ export function EditCategoryView({ category, onSave, onCancel, onDelete, onParti
                 { id: 'globalCompetitors', label: 'Global Competitors' },
                 { id: 'foundersAndTeam', label: 'Founders & Team' },
                 { id: 'legalLogistics', label: 'Legal & Logistics' },
-                { id: 'suppliersBudget', label: 'Suppliers & Budget' }
+                { id: 'suppliersBudget', label: 'Suppliers & Budget' },
+                { id: 'searchTrends', label: '📈 Search Trends' }
               ].map(tab => {
                 const hasData = !!(formData.agentResults && formData.agentResults[tab.id as keyof typeof formData.agentResults]);
                 return (

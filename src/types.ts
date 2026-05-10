@@ -49,6 +49,7 @@ export interface Category {
     foundersAndTeam?: string;
     adIntelligence?: string;
     retentionEngineering?: string;
+    searchTrends?: string;
   };
   notes: string;
   researchSources?: string[];

@@ -38,6 +38,7 @@ export interface ResearchProgress {
     foundersAndTeam: { status: AgentStatus; detail: string };
     adIntelligence: { status: AgentStatus; detail: string };
     retentionEngineering: { status: AgentStatus; detail: string };
+    searchTrends: { status: AgentStatus; detail: string };
   };
 }
 
@@ -60,6 +61,7 @@ export const createInitialProgress = (): ResearchProgress => ({
     foundersAndTeam: { status: 'pending', detail: 'Waiting to start...' },
     adIntelligence: { status: 'pending', detail: 'Waiting to start...' },
     retentionEngineering: { status: 'pending', detail: 'Waiting to start...' },
+    searchTrends: { status: 'pending', detail: 'Waiting to start...' },
   }
 });
 
@@ -135,7 +137,7 @@ export async function agenticDeepResearchCategory(
         - "${category.name}" unit economics startup pitch deck investor
 
         Keep CLV and CAC completely separate in your logic. Return a comprehensive breakdown with inline source citations.`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
       });
       updateAgent('unitEconomics', 'completed', 'Unit economics finalized.');
       const data = JSON.parse(response.text?.trim() || "{}");
@@ -215,7 +217,7 @@ ANTI-HALLUCINATION RULES
 • marketSizeNL, EU, Global: cite year; prefer official statistics or reputable industry reports.
 
 Return a detailed markdownReport covering: market size (global/EU/NL), CAGR, consumer psychology (loyalty, story depth), niche potential, and the full funnel. Include sources list.`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
       });
       updateAgent('marketDynamics', 'completed', 'Market dynamics mapped.');
       const data = JSON.parse(response.text?.trim() || "{}");
@@ -255,7 +257,7 @@ Return a detailed markdownReport covering: market size (global/EU/NL), CAGR, con
         - "${category.name}" site:similarweb.com monthly visits NL competitor
 
         For each of 2-4 real competitors: company name, URL, monthly traffic estimate (SimilarWeb), pricing, Trustpilot score, positioning angle, and key gap/weakness to exploit. Return Markdown text and all sources.`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
       });
       updateAgent('localCompetitors', 'completed', 'Local competition analyzed.');
       const data = JSON.parse(response.text?.trim() || "{}");
@@ -294,7 +296,7 @@ Return a detailed markdownReport covering: market size (global/EU/NL), CAGR, con
         - "${category.name}" podcast interview founder scaling unit economics
 
         Identify what makes the top 1-2 global players successful: exact growth channels, retention mechanics, product diff, unit economics. Extract from X, LinkedIn, Reddit, podcasts where found. Return Markdown text and all sources.`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
       });
       updateAgent('globalCompetitors', 'completed', 'Global benchmarks identified.');
       const data = JSON.parse(response.text?.trim() || "{}");
@@ -323,7 +325,7 @@ Return a detailed markdownReport covering: market size (global/EU/NL), CAGR, con
         contents: `You are a Dutch Legal and E-commerce Compliance Expert. Analyze the category: "${category.name}" for the Netherlands market. Is it legal? Does it require special licenses? Is it a restricted ad category on Meta/Google?
         ANTI-HALLUCINATION RULES: (1) Only cite legal requirements you find via search on official sources (overheid.nl, autoriteitpersoonsgegevens.nl, reclame.code.nl, or credible legal blogs). (2) Do not assume regulatory status from memory — always verify via search. (3) If a legal point cannot be verified via search, say "Unverified — consult a Dutch e-commerce lawyer" instead of guessing. (4) Sources array is mandatory — include every URL used.`,
 
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
       });
       updateAgent('legalLogistics', 'completed', 'Legal and compliance checked.');
       const data = JSON.parse(response.text?.trim() || "{}");
@@ -363,7 +365,7 @@ Return a detailed markdownReport covering: market size (global/EU/NL), CAGR, con
         - "${category.name}" MOQ minimum order e-commerce startup
 
         Provide: real supplier names, MOQ, unit cost, estimated COGs%, and a full MVP budget breakdown from €0 to 100 subscribers in NL. Flag supply chain risks. Return Markdown text and all sources.`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
       });
       updateAgent('suppliersBudget', 'completed', 'Suppliers and budget analyzed.');
       const data = JSON.parse(response.text?.trim() || "{}");
@@ -449,7 +451,7 @@ New platform features (Meta AI ads, TikTok Shop Live, YouTube Shopping, Pinteres
 Top 3-5 proven hooks/angles with evidence from search. What emotional triggers drive conversions in this category?
 
 ANTI-HALLUCINATION: All CPM/CPC/ROAS/CAC figures must trace to a real source URL from this session. If a benchmark cannot be verified, write "No verified benchmark found — industry proxy: [X], treat as estimate". Never invent figures.`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
       });
       updateAgent('adIntelligence', 'completed', 'Ad intelligence mapped.');
       const data = JSON.parse(response.text?.trim() || "{}");
@@ -544,7 +546,7 @@ From customer surveys, Reddit, review analysis, or cancellation studies found vi
 - Hyperlocal NL tactics (PostNL partnerships, iDEAL billing retry, etc.)
 
 ANTI-HALLUCINATION: Every percentage must cite a real source URL from this session. If no specific data found for this category, cite nearest adjacent category and clearly label as proxy "[adjacent category proxy — no direct source found]".`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
       });
       updateAgent('retentionEngineering', 'completed', 'Retention engineering report complete.');
       const data = JSON.parse(response.text?.trim() || "{}");
@@ -571,13 +573,119 @@ ANTI-HALLUCINATION: Every percentage must cite a real source URL from this sessi
         contents: `You are an elite talent scout and investigative journalist. Find the founders or key people of the top 3 companies in the category: "${category.name}".
         ANTI-HALLUCINATION RULE FOR LINKEDIN URLS: You may ONLY include a LinkedIn URL if you actually retrieve it via Google Search in this session. LLMs are known to hallucinate LinkedIn profile URLs — a wrong URL destroys credibility. If a search does not return a verifiable LinkedIn URL, write "LinkedIn: [not found in search]" instead of guessing. Never construct a URL from a person's name.
         METHOD: Use Google Search with operators like site:linkedin.com/in/ "[Founder Name]" "[Company]", and search for podcast transcripts, news articles, Crunchbase profiles, and previous exits. Only include facts you can trace to a real search result. Provide factual bios in Markdown.`,
-        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
       });
       updateAgent('foundersAndTeam', 'completed', 'Founders identified.');
       const data = JSON.parse(response.text?.trim() || "{}");
       return { raw: data.markdown || '', sources: data.sources || [] };
     } catch (e: any) {
       updateAgent('foundersAndTeam', 'error', e.message);
+      return { raw: `Error: ${e.message}`, sources: [] };
+    }
+  };
+
+  const runSearchTrendsAgent = async (): Promise<{ raw: string, sources: string[] }> => {
+    updateAgent('searchTrends', 'running', 'Fetching Google Trends data (EN + NL)...');
+    const schema = {
+      type: Type.OBJECT,
+      properties: {
+        markdown: { type: Type.STRING },
+        sources: { type: Type.ARRAY, items: { type: Type.STRING } }
+      },
+      required: ['markdown', 'sources']
+    };
+    try {
+      const response = await safeGenerate({
+        model: modelName,
+        contents: `You are a Google Trends data analyst and market intelligence expert. Your task is to retrieve and interpret REAL, LIVE Google Trends data for the category: "${category.name}".
+
+## MANDATORY SEARCHES — You MUST execute ALL of the following Google searches in this session:
+
+1. Visit and retrieve data from: https://trends.google.com/trends/explore?q=${encodeURIComponent(category.name)}&geo=NL (Dutch/Netherlands)
+2. Visit and retrieve data from: https://trends.google.com/trends/explore?q=${encodeURIComponent(category.name)} (Global/English)
+3. Search Google for: site:trends.google.com "${category.name}" trends NL Netherlands
+4. Search Google for: "${category.name}" Google Trends interest over time Netherlands 2024 2025
+5. Search Dutch translation of "${category.name}" on Google Trends NL — find the Dutch search term (e.g., for "yoga mat" search "yogamat" or "yoga mat kopen NL")
+6. Search: trends.google.com "${category.name}" related queries rising breakout Netherlands
+7. Search: "${category.name}" seasonal search peaks Netherlands Belgium 2024
+8. Search: "${category.name}" vs "protein powder" vs "yoga mat" Google Trends comparison (use these as benchmark anchors for scale)
+9. Search: "${category.name}" search interest rising or declining trend 2023 2024 2025
+10. Search: "${category.name}" Dutch language search terms trending NL consumer interest
+
+## UNDERSTAND GOOGLE TRENDS NUMBERS (explain this in your report):
+- Google Trends scores are RELATIVE, not absolute. 100 = peak popularity for that term in the selected timeframe, 0 = essentially no searches.
+- The numbers are normalized relative to the highest point — so 50 means "half as searched as at its peak".
+- These numbers are NOT percentages of all searches. A "50" does NOT mean 50% of searches.
+- Always compare to at least 2 familiar anchors (e.g., "protein powder" typically scores 65-80, "yoga mat" scores 45-65, "pet food" scores 70-90, "coffee subscription" scores 20-40) to give context.
+- Example interpretation: "Score 62 for ${category.name} is similar to 'yoga mat' (60), which means it's a well-established search category — not hyper-niche, not mainstream-dominant."
+
+## OUTPUT FORMAT — your markdown MUST include ALL of these sections:
+
+# 📈 Google Trends Intelligence: ${category.name}
+
+## Current Interest Score (0-100 Scale)
+- Global interest score: [number] / 100
+- Netherlands (NL) interest score: [number] / 100
+- 12-month trend direction: Rising / Stable / Declining (with % change if available)
+- Plain-language meaning: "A score of [X] means [category name] is searched [interpretation]. For comparison, 'yoga mat' scores about [Y], so this category is [more/less/equally] searched."
+
+## Comparison to Benchmark Categories
+Create a simple comparison table:
+| Category | Score | Interpretation |
+|----------|-------|----------------|
+| ${category.name} | [score] | [what it means] |
+| protein powder | ~70 | well-established |
+| yoga mat | ~55 | moderate established |
+| coffee subscription | ~25 | niche |
+| pet food | ~80 | mainstream |
+
+## Trend Direction (Last 12 Months)
+- Is interest growing, flat, or declining?
+- Key inflection points (months where interest spiked or dropped)
+- YoY comparison (2023 vs 2024 vs 2025)
+
+## Seasonal Patterns
+- Peak months (e.g., "Interest spikes 3x in December due to gift season")
+- Low months (e.g., "Summer slump in July-August")
+- Specific NL seasonal context (Dutch holidays, Sinterklaas, King's Day, etc.)
+- How to time product launches or ad spend around these patterns
+
+## Rising Related Queries (Breakout Trends)
+List the top 5-10 rising related search queries from Google Trends for this category. Flag any "Breakout" queries (queries with >5000% growth).
+
+## Dutch-Specific Search Terms (NL)
+- Primary Dutch search term(s) for this category
+- NL interest score / 100
+- Top rising Dutch queries
+- Any uniquely Dutch angle (local brands, Dutch consumer preferences)
+
+## Geographic Distribution (Netherlands)
+- Which provinces/cities in NL show highest interest
+- Any regional patterns relevant for targeting
+
+## Competitor Comparison on Google Trends
+Compare search interest for top 3 brands/products IN this category:
+| Brand/Product | Score | Trend |
+|---------------|-------|-------|
+
+## Key Takeaways for DTC Launch Timing
+- Best month to launch in NL based on trend data
+- Whether to front-load or back-load ad spend based on seasonality
+- Any trend that suggests growing consumer interest (tailwind) or saturation risk
+
+ANTI-HALLUCINATION RULES:
+- Every score must come from actual Google Trends data retrieved in this session via Google Search
+- If you cannot retrieve a specific Trends score, write "[score not retrieved — estimate based on adjacent data: X]"
+- Do NOT invent trend numbers. Use the search tools to get real data.
+- Only include rising queries that appear in actual Google Trends results
+- All sources must be real URLs from this session`,
+        config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] },
+      });
+      updateAgent('searchTrends', 'completed', 'Search trends data retrieved.');
+      const data = JSON.parse(response.text?.trim() || "{}");
+      return { raw: data.markdown || '', sources: data.sources || [] };
+    } catch (e: any) {
+      updateAgent('searchTrends', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
     }
   };
@@ -623,6 +731,9 @@ ANTI-HALLUCINATION: Every percentage must cite a real source URL from this sessi
     runRetentionEngineeringAgent(),
   ]);
 
+  updateProgress({ overall: 'Running Search Trends Intelligence (Google Trends EN + NL)...' });
+  const searchTrends = await runSearchTrendsAgent();
+
   updateProgress({ overall: 'Merging intelligence reports...' });
 
   const allSources = [
@@ -635,6 +746,7 @@ ANTI-HALLUCINATION: Every percentage must cite a real source URL from this sessi
     ...(foundersAndTeam.sources || []),
     ...(adIntel.sources || []),
     ...(retentionEng.sources || []),
+    ...(searchTrends.sources || []),
   ];
 
   updateProgress({ overall: 'Research complete.' });
@@ -653,6 +765,7 @@ ANTI-HALLUCINATION: Every percentage must cite a real source URL from this sessi
        foundersAndTeam: foundersAndTeam.raw,
        adIntelligence: adIntel.raw,
        retentionEngineering: retentionEng.raw,
+       searchTrends: searchTrends.raw,
     },
     researchSources: [...new Set([...(category.researchSources || []), ...allSources])],
     lastUpdated: new Date().toISOString()
@@ -759,7 +872,7 @@ export async function discoverDtcCategories(
         ANTI-HALLUCINATION: Use search to verify each sector. Only include sectors with real, currently operating DTC businesses. Do not suggest theoretical or purely emerging sectors with no live players.
         ${avoidedSectorsText}
         Return ONLY the list.`,
-        config: { responseMimeType: "application/json", responseSchema: sectorSchema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } }
+        config: { responseMimeType: "application/json", responseSchema: sectorSchema, tools: [{ googleSearch: {} }] }
       });
       if (signal.aborted) return;
 
@@ -795,7 +908,7 @@ export async function discoverDtcCategories(
         const response = await safeGenerate({
           model: modelName,
           contents: prompt,
-          config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } }
+          config: { responseMimeType: "application/json", responseSchema: schema, tools: [{ googleSearch: {} }] }
         });
         if (signal.aborted) return;
 
@@ -912,7 +1025,7 @@ ANTI-HALLUCINATION: Only return prices/products you actually found on their live
 Match to an existing category if relevant: [${input.existingCategoryNames?.join(', ')}]`,
         { inlineData: { data: input.imageData, mimeType: input.mimeType } }
       ],
-      config: { responseMimeType: "application/json", responseSchema: pass1Schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+      config: { responseMimeType: "application/json", responseSchema: pass1Schema, tools: [{ googleSearch: {} }] },
     });
     pass1Data = JSON.parse(res.text?.trim() || '{}');
   } catch (e: any) {
@@ -961,7 +1074,7 @@ ANTI-HALLUCINATION — non-negotiable:
 - LinkedIn URL: ONLY include if you actually retrieved it from a search result in this session. Never construct from a name. If not found, write "LinkedIn: [not retrieved via search]".
 - Employee count: only report the exact range LinkedIn shows. Never estimate.
 - All facts must trace to a URL. Write "Not found via search" if unavailable.`,
-      config: { responseMimeType: "application/json", responseSchema: pass2Schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+      config: { responseMimeType: "application/json", responseSchema: pass2Schema, tools: [{ googleSearch: {} }] },
     });
     pass2Data = JSON.parse(res.text?.trim() || '{}');
   } catch (e: any) {
@@ -1010,7 +1123,7 @@ MANDATORY SEARCHES — run ALL of these:
 - "${companyName}" site:sec.gov — SEC filings if publicly traded or Reg-CF/Reg-A
 
 ANTI-HALLUCINATION: Every figure must trace to a real URL from this session. If no funding found, write "No funding found via search — likely bootstrapped or undisclosed". Never invent investors, round sizes, or revenue.`,
-      config: { responseMimeType: "application/json", responseSchema: pass3Schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+      config: { responseMimeType: "application/json", responseSchema: pass3Schema, tools: [{ googleSearch: {} }] },
     });
     pass3Data = JSON.parse(res.text?.trim() || '{}');
   } catch (e: any) {
@@ -1057,7 +1170,7 @@ MANDATORY SEARCHES — run ALL of these:
 - "${companyName}" "promo code" OR "${companyName}" affiliate program — growth channels
 
 ANTI-HALLUCINATION: Social handles must come from real search results. Never construct @handles. All facts must have source URLs. Write "Not found via search" for anything not confirmed.`,
-      config: { responseMimeType: "application/json", responseSchema: pass4Schema, tools: [{ googleSearch: {} }], toolConfig: { includeServerSideToolInvocations: true } },
+      config: { responseMimeType: "application/json", responseSchema: pass4Schema, tools: [{ googleSearch: {} }] },
     });
     pass4Data = JSON.parse(res.text?.trim() || '{}');
   } catch (e: any) {

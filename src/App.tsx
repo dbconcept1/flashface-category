@@ -11,12 +11,13 @@ import { PromptsView } from './views/PromptsView';
 import { DiscoveryView } from './views/DiscoveryView';
 import { cn } from './utils';
 import { Target, LayoutGrid, BarChart2, Plus, Settings2, FileText, DownloadCloud, Loader2, Terminal, Radar, Menu, CheckCircle2, AlertCircle, Cloud, Euro, MessageSquare } from 'lucide-react';
-import { agenticDeepResearchCategory, discoverDtcCategories, createInitialProgress, CategoryResearchState } from './services/aiService';
+import { agenticDeepResearchCategory, discoverDtcCategories, createInitialProgress } from './services/aiService';
 import stringSimilarity from 'string-similarity';
-import { lsLoadCategories, saveAllLayers, loadBestCategories } from './lib/db';
+import { lsLoadCategories, saveAllLayers, loadBestCategories, flushGithubSave } from './lib/db';
 import { SettingsView } from './views/SettingsView';
 import { ChatGPTView } from './views/ChatGPTView';
 import { getSettings, calcBudgetPercent } from './lib/settings';
+import { useResearchSetter } from './lib/researchContext';
 
 type ViewMode = 'dashboard' | 'categories' | 'comparison' | 'edit' | 'import' | 'export' | 'prompts' | 'discovery' | 'settings' | 'chatgpt';
 
@@ -38,13 +39,13 @@ export default function App() {
   const [currentView, setCurrentView] = useState<ViewMode>('dashboard');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showWeightsMenu, setShowWeightsMenu] = useState(false);
-  const [enhancingIds, setEnhancingIds] = useState<Record<string, CategoryResearchState>>({});
-
   const [importState, setImportState] = useState<{
     tasks: import('./views/ImportView').DocumentTask[];
   }>({
     tasks: []
   });
+
+  const setEnhancingIds = useResearchSetter();
 
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isBulkResearching, setIsBulkResearching] = useState(false);
@@ -62,6 +63,14 @@ export default function App() {
   // session with an empty localStorage would race and overwrite the server file with
   // INITIAL_CATEGORIES before loadBestCategories could read the real data.
   const hasLoadedFromPersistenceRef = useRef(false);
+
+  // Flush any pending debounced GitHub save when the user closes/refreshes the tab,
+  // so the very last change is always committed even if the 8s debounce hasn't fired.
+  useEffect(() => {
+    const handleUnload = () => flushGithubSave();
+    window.addEventListener('beforeunload', handleUnload);
+    return () => window.removeEventListener('beforeunload', handleUnload);
+  }, []);
 
   useEffect(() => {
     categoriesRef.current = categories;
@@ -285,7 +294,7 @@ export default function App() {
   /** Returns true if the category has any agent results that failed or are missing (all 9 agents) */
   const hasIncompleteAgents = (c: Category): boolean => {
     if (!c.agentResults) return false;
-    const keys = ['unitEconomics', 'marketDynamics', 'localCompetitors', 'globalCompetitors', 'legalLogistics', 'suppliersBudget', 'foundersAndTeam', 'adIntelligence', 'retentionEngineering'] as const;
+    const keys = ['unitEconomics', 'marketDynamics', 'localCompetitors', 'globalCompetitors', 'legalLogistics', 'suppliersBudget', 'foundersAndTeam', 'adIntelligence', 'retentionEngineering', 'searchTrends'] as const;
     return keys.some(key => {
       const r = c.agentResults![key];
       return !r || r.startsWith('Error:');
@@ -659,7 +668,7 @@ export default function App() {
           {/* Scrollable Context */}
           <main className={cn("flex-1 scroll-smooth relative", currentView === 'categories' ? 'overflow-hidden' : 'overflow-y-auto p-8')}>
             {currentView === 'dashboard' && <DashboardView categories={categories} weights={ weights} maxClv={maxClv} />}
-            {currentView === 'categories' && <CategoriesView categories={categories} weights={weights} maxClv={maxClv} onEdit={openEditor} onUpdateStatus={handleUpdateStatus} onDeepSearch={handleDeepSearch} onDeepSearchAllNew={handleDeepSearchAllNew} onRefreshResearched={handleRefreshResearched} onRefreshFailed={handleRefreshFailed} onStopBulkResearch={handleStopBulkResearch} isBulkResearching={isBulkResearching} bulkStats={bulkStats} enhancingIds={enhancingIds} />}
+            {currentView === 'categories' && <CategoriesView categories={categories} weights={weights} maxClv={maxClv} onEdit={openEditor} onUpdateStatus={handleUpdateStatus} onDeepSearch={handleDeepSearch} onDeepSearchAllNew={handleDeepSearchAllNew} onRefreshResearched={handleRefreshResearched} onRefreshFailed={handleRefreshFailed} onStopBulkResearch={handleStopBulkResearch} isBulkResearching={isBulkResearching} bulkStats={bulkStats} />}
             {currentView === 'comparison' && <ComparisonView categories={categories} weights={weights} maxClv={maxClv} />}
             {currentView === 'import' && <ImportView onImport={handleImport} state={importState} setState={setImportState} existingCategories={categories} />}
             {currentView === 'discovery' && (

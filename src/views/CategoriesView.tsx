@@ -3,6 +3,7 @@ import { Category, Weights, CategoryStatus } from '../types';
 import { calculateDecisionScore, calculateLtvCac, cn, getMacroSector } from '../utils';
 import { LayoutGrid, List, Search, Ban, Trophy, Sparkles, Loader2, Square, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { CategoryResearchState } from '../services/aiService';
+import { useResearchState } from '../lib/researchContext';
 
 interface Props {
   categories: Category[];
@@ -17,10 +18,10 @@ interface Props {
   onStopBulkResearch: () => void;
   isBulkResearching: boolean;
   bulkStats: { total: number; done: number; failed: number } | null;
-  enhancingIds: Record<string, CategoryResearchState>;
 }
 
-export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateStatus, onDeepSearch, onDeepSearchAllNew, onRefreshResearched, onRefreshFailed, onStopBulkResearch, isBulkResearching, bulkStats, enhancingIds }: Props) {
+export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateStatus, onDeepSearch, onDeepSearchAllNew, onRefreshResearched, onRefreshFailed, onStopBulkResearch, isBulkResearching, bulkStats }: Props) {
+  const enhancingIds = useResearchState();
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('table');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<CategoryStatus | 'All'>('All');

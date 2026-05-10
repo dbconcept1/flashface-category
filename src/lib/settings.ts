@@ -3,6 +3,7 @@ const SETTINGS_KEY = 'flashface_settings';
 export interface AppSettings {
   geminiApiKey: string;
   openaiApiKey: string;
+  githubToken: string;
   budgetLimitEur: number | null; // null = no limit
   spendingEur: number;
   totalTokensIn: number;
@@ -14,6 +15,7 @@ export interface AppSettings {
 const DEFAULTS: AppSettings = {
   geminiApiKey: '',
   openaiApiKey: '',
+  githubToken: '',
   budgetLimitEur: 50,
   spendingEur: 0,
   totalTokensIn: 0,
