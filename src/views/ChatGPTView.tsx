@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Category, Weights, BrainEntry } from '../types';
+import { Category, Weights, BrainEntry, BrainConversation } from '../types';
 import { calculateDecisionScore, calculateLtvCac, getMacroSector, cn } from '../utils';
 import {
   MessageSquare, Send, Square, Plus, Settings2, Loader2,
   User, Bot, ChevronDown, ChevronUp, Copy, CheckCircle2, Brain,
+  BookmarkPlus, History, X,
 } from 'lucide-react';
 import { getOpenAiApiKey } from '../lib/settings';
 import { compileBrain, estimateBrainTokens } from '../lib/brainCompiler';
@@ -13,8 +14,11 @@ interface Props {
   weights: Weights;
   maxClv: number;
   brainEntries?: BrainEntry[];
+  conversations?: BrainConversation[];
   onGoToSettings?: () => void;
   onGoToBrain?: () => void;
+  onSaveConversation?: (c: BrainConversation) => void;
+  onSaveToBrain?: (content: string) => void;
 }
 
 interface Message {
@@ -362,30 +366,57 @@ const STARTERS = [
   'What adjacent niches should I explore given my current winners?',
 ];
 
-function MessageBubble({ msg }: { msg: Message }) {
+function MessageBubble({ msg, onSaveToBrain }: { msg: Message; onSaveToBrain?: (text: string) => void }) {
   const isUser = msg.role === 'user';
+  const [saved, setSaved] = useState(false);
+
+  const handleSaveToBrain = () => {
+    if (!onSaveToBrain) return;
+    onSaveToBrain(msg.content);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  };
+
   return (
-    <div className={cn('flex items-start gap-3 px-4 py-3', isUser ? 'flex-row-reverse' : 'flex-row')}>
+    <div className={cn('flex items-start gap-3 px-4 py-3 group', isUser ? 'flex-row-reverse' : 'flex-row')}>
       <div className={cn(
         'flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center mt-0.5',
         isUser ? 'bg-[#e05000]/30 border border-[#e05000]/40' : 'bg-[#1a1a1a] border border-[#252525]'
       )}>
         {isUser ? <User className="w-3.5 h-3.5 text-[#e05000]" /> : <Bot className="w-3.5 h-3.5 text-[#666]" />}
       </div>
-      <div className={cn(
-        'max-w-[80%] rounded-xl px-4 py-3 text-sm leading-relaxed',
-        isUser
-          ? 'bg-[#e05000]/15 border border-[#e05000]/15 text-orange-50 rounded-tr-sm'
-          : 'bg-[#111] border border-[#1e1e1e] text-[#d0d0d0] rounded-tl-sm'
-      )}>
-        {msg.streaming && !msg.content ? (
-          <div className="flex items-center gap-1.5 py-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-            <span className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-            <span className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce" style={{ animationDelay: '300ms' }} />
-          </div>
-        ) : (
-          <pre className="whitespace-pre-wrap font-sans">{msg.content}</pre>
+      <div className="flex flex-col gap-1 max-w-[80%]">
+        <div className={cn(
+          'rounded-xl px-4 py-3 text-sm leading-relaxed',
+          isUser
+            ? 'bg-[#e05000]/15 border border-[#e05000]/15 text-orange-50 rounded-tr-sm'
+            : 'bg-[#111] border border-[#1e1e1e] text-[#d0d0d0] rounded-tl-sm'
+        )}>
+          {msg.streaming && !msg.content ? (
+            <div className="flex items-center gap-1.5 py-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+          ) : (
+            <pre className="whitespace-pre-wrap font-sans">{msg.content}</pre>
+          )}
+        </div>
+        {/* Save to Brain hover action — assistant messages only */}
+        {!isUser && !msg.streaming && msg.content && onSaveToBrain && (
+          <button
+            onClick={handleSaveToBrain}
+            title="Save this insight to your Brain"
+            className={cn(
+              'self-start flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-medium border transition-all opacity-0 group-hover:opacity-100',
+              saved
+                ? 'bg-emerald-500/12 border-emerald-500/25 text-emerald-400'
+                : 'bg-[#111] border-[#1e1e1e] text-[#484848] hover:text-[#e05000] hover:border-[#e05000]/25',
+            )}
+          >
+            {saved ? <CheckCircle2 className="w-3 h-3" /> : <BookmarkPlus className="w-3 h-3" />}
+            {saved ? 'Saved to Brain' : 'Save to Brain'}
+          </button>
         )}
       </div>
     </div>
@@ -393,17 +424,24 @@ function MessageBubble({ msg }: { msg: Message }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-export function ChatGPTView({ categories, weights, maxClv, brainEntries = [], onGoToSettings, onGoToBrain }: Props) {
+export function ChatGPTView({
+  categories, weights, maxClv, brainEntries = [],
+  conversations = [], onGoToSettings, onGoToBrain, onSaveConversation, onSaveToBrain,
+}: Props) {
   const apiKey = getOpenAiApiKey();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
+  // Track the ID of the current in-progress conversation (so we upsert, not append)
+  const currentConvIdRef = useRef<string | null>(null);
+  const convCreatedAtRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (atBottom) messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -422,6 +460,30 @@ export function ChatGPTView({ categories, weights, maxClv, brainEntries = [], on
     const brainSection = brain ? `\n\n${brain}\n\n---` : '';
     return `${SYSTEM_PROMPT}${brainSection}\n\n---\n\n${buildSessionData(categories, weights, maxClv)}`;
   }, [categories, weights, maxClv, brainEntries]);
+
+  /** Persist the current conversation to all layers. */
+  const persistConversation = useCallback((msgs: Message[]) => {
+    if (!onSaveConversation || msgs.length === 0) return;
+    const firstUser = msgs.find(m => m.role === 'user');
+    const title = firstUser
+      ? firstUser.content.slice(0, 80).replace(/\n/g, ' ')
+      : 'Untitled conversation';
+    const now = new Date().toISOString();
+    if (!currentConvIdRef.current) {
+      currentConvIdRef.current = `conv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      convCreatedAtRef.current = now;
+    }
+    const conv: BrainConversation = {
+      id: currentConvIdRef.current,
+      title,
+      model: 'gpt-4o',
+      messages: msgs.filter(m => !m.streaming).map(m => ({ role: m.role, content: m.content })),
+      brainEntryCount: brainEntries.filter(e => e.priority !== 'archived').length,
+      createdAt: convCreatedAtRef.current ?? now,
+      updatedAt: now,
+    };
+    onSaveConversation(conv);
+  }, [onSaveConversation, brainEntries]);
 
   const sendMessage = useCallback(async (userText: string) => {
     const text = userText.trim();
@@ -501,6 +563,8 @@ export function ChatGPTView({ categories, weights, maxClv, brainEntries = [], on
         if (next[next.length - 1]?.role === 'assistant') {
           next[next.length - 1] = { role: 'assistant', content: fullContent };
         }
+        // Persist the completed conversation
+        persistConversation(next);
         return next;
       });
 
@@ -531,6 +595,8 @@ export function ChatGPTView({ categories, weights, maxClv, brainEntries = [], on
     setMessages([]);
     setError(null);
     setInput('');
+    currentConvIdRef.current = null;
+    convCreatedAtRef.current = null;
     setTimeout(() => textareaRef.current?.focus(), 50);
   };
 
@@ -614,7 +680,55 @@ export function ChatGPTView({ categories, weights, maxClv, brainEntries = [], on
           <Plus className="w-3.5 h-3.5" />
           New chat
         </button>
+        {conversations.length > 0 && (
+          <button
+            onClick={() => setShowHistory(v => !v)}
+            title="View conversation history"
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs font-medium transition-colors',
+              showHistory
+                ? 'bg-[#e05000]/15 border-[#e05000]/25 text-[#e05000]'
+                : 'bg-[#111] hover:bg-[#1a1a1a] border-[#1e1e1e] text-[#666] hover:text-[#f0f0f0]',
+            )}
+          >
+            <History className="w-3.5 h-3.5" />
+            {conversations.length}
+          </button>
+        )}
       </div>
+
+      {/* Conversation history drawer */}
+      {showHistory && (
+        <div className="shrink-0 border-b border-[#1a1a1a] bg-[#090909] max-h-52 overflow-y-auto">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-[#141414]">
+            <span className="text-[10px] text-[#484848] uppercase tracking-wider font-semibold">Saved Conversations ({conversations.length})</span>
+            <button onClick={() => setShowHistory(false)} className="text-[#333] hover:text-[#aaa]"><X className="w-3.5 h-3.5" /></button>
+          </div>
+          <div className="divide-y divide-[#111]">
+            {[...conversations].reverse().map(conv => (
+              <button
+                key={conv.id}
+                onClick={() => {
+                  setMessages(conv.messages.map(m => ({ role: m.role, content: m.content })));
+                  currentConvIdRef.current = conv.id;
+                  convCreatedAtRef.current = conv.createdAt;
+                  setShowHistory(false);
+                }}
+                className="w-full text-left flex items-start gap-3 px-4 py-2.5 hover:bg-[#111] transition-colors"
+              >
+                <MessageSquare className="w-3 h-3 mt-0.5 shrink-0 text-[#2a2a2a]" />
+                <div className="min-w-0">
+                  <p className="text-xs text-[#aaa] truncate">{conv.title}</p>
+                  <p className="text-[10px] text-[#333]">
+                    {new Date(conv.updatedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    {' · '}{conv.messages.length} messages
+                  </p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Messages */}
       <div
@@ -640,7 +754,7 @@ export function ChatGPTView({ categories, weights, maxClv, brainEntries = [], on
         ) : (
           <div className="max-w-3xl mx-auto">
             {messages.map((msg, i) => (
-              <MessageBubble key={i} msg={msg} />
+              <MessageBubble key={i} msg={msg} onSaveToBrain={onSaveToBrain} />
             ))}
             <div ref={messagesEndRef} className="h-4" />
           </div>
@@ -703,7 +817,7 @@ export function ChatGPTView({ categories, weights, maxClv, brainEntries = [], on
           )}
         </div>
         <p className="text-center text-[10px] text-[#2a2a2a] mt-2">
-          GPT-4o · Data sent to OpenAI per message · Conversations not stored
+          GPT-4o · Data sent to OpenAI per message · Conversations auto-saved to Brain OS
         </p>
       </div>
     </div>

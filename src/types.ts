@@ -181,6 +181,18 @@ export type BrainEntryType =
  */
 export type BrainPriority = 'core' | 'reference' | 'archived';
 
+/**
+ * Confidence level:
+ *   verified  — backed by cited sources (URLs, named studies, real data)
+ *   strong    — based on repeated direct experience or widely-known principle
+ *   belief    — personal conviction, not independently verified
+ *
+ * GPT receives the confidence level and calibrates uncertainty accordingly:
+ *   verified → "According to operator's verified research…"
+ *   belief   → "Operator believes (not independently verified) that…"
+ */
+export type BrainConfidence = 'verified' | 'strong' | 'belief';
+
 export interface BrainEntry {
   id: string;
   type: BrainEntryType;
@@ -189,6 +201,10 @@ export interface BrainEntry {
   content: string;
   /** Where it came from: URL, book, person, podcast, etc. */
   source?: string;
+  /** Source URLs used to verify this entry (populated by Search enrichment). */
+  verifiedSources?: string[];
+  /** ISO timestamp of last Gemini Search enrichment run. */
+  verifiedAt?: string;
   /**
    * What this means for YOUR specific decisions and actions.
    * This is what GPT reads first — it must be actionable.
@@ -196,8 +212,43 @@ export interface BrainEntry {
   implication: string;
   tags: string[];
   priority: BrainPriority;
+  /**
+   * Confidence level — how certain is this knowledge?
+   * GPT uses this to frame its responses appropriately.
+   */
+  confidence: BrainConfidence;
   createdAt: string;
   updatedAt: string;
+}
+
+// ─── Saved Conversations ──────────────────────────────────────────────────────
+
+/**
+ * A single chat message (user or AI).
+ */
+export interface ConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/**
+ * A complete saved conversation with metadata.
+ * Stored permanently — never auto-deleted.
+ * The brainSnapshot records what brain entries were active at the time.
+ */
+export interface BrainConversation {
+  id: string;
+  /** Auto-generated from first user message (first 80 chars). */
+  title: string;
+  messages: ConversationMessage[];
+  /** Which AI model was used for this conversation. */
+  model: string;
+  /** ISO date of first message. */
+  createdAt: string;
+  /** ISO date of last message (updated on each reply). */
+  updatedAt: string;
+  /** Count of brain entries (core + reference) active at conversation start. */
+  brainEntryCount: number;
 }
 
 // ─── Podcast Intel ────────────────────────────────────────────────────────────

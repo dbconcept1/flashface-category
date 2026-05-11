@@ -12,8 +12,8 @@
  * The compiled brain is passed to ChatGPTView and prepended to every message.
  */
 
-import { useState, useMemo, useRef, useCallback } from 'react';
-import type { BrainEntry, BrainEntryType, BrainPriority } from '../types';
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
+import type { BrainEntry, BrainEntryType, BrainPriority, BrainConfidence } from '../types';
 import {
   Brain, Plus, Search, X, Trash2, ChevronDown, ChevronUp,
   Zap, Quote, Star, User, Lightbulb, Shield, GitMerge, FileText,
@@ -60,6 +60,13 @@ const PRIORITY_CONFIG: Record<BrainPriority, {
 const ALL_TYPES = Object.keys(TYPE_CONFIG) as BrainEntryType[];
 const ALL_PRIORITIES: BrainPriority[] = ['core', 'reference', 'archived'];
 
+const CONFIDENCE_CONFIG: Record<BrainConfidence, { label: string; dot: string; title: string }> = {
+  verified: { label: 'Verified',  dot: 'bg-emerald-400', title: 'Backed by cited sources' },
+  strong:   { label: 'Strong',    dot: 'bg-amber-400',   title: 'Direct experience / known principle' },
+  belief:   { label: 'Belief',    dot: 'bg-gray-500',    title: 'Personal conviction — not independently verified' },
+};
+const ALL_CONFIDENCES: BrainConfidence[] = ['verified', 'strong', 'belief'];
+
 const EMPTY_FORM: Omit<BrainEntry, 'id' | 'createdAt' | 'updatedAt'> = {
   type: 'principle',
   title: '',
@@ -68,6 +75,7 @@ const EMPTY_FORM: Omit<BrainEntry, 'id' | 'createdAt' | 'updatedAt'> = {
   implication: '',
   tags: [],
   priority: 'core',
+  confidence: 'strong',
 };
 
 // ─── Gemini Vision extraction ─────────────────────────────────────────────────
@@ -146,6 +154,16 @@ function PriorityDot({ priority }: { priority: BrainPriority }) {
   );
 }
 
+function ConfidenceBadge({ confidence }: { confidence: BrainConfidence }) {
+  const cfg = CONFIDENCE_CONFIG[confidence];
+  return (
+    <span className="flex items-center gap-1" title={cfg.title}>
+      <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', cfg.dot)} />
+      <span className="text-[10px] text-[#383838] font-medium">{cfg.label}</span>
+    </span>
+  );
+}
+
 function FilterChip({
   label, active, onClick, colorClass,
 }: { label: string; active: boolean; onClick: () => void; colorClass?: string }) {
@@ -189,6 +207,7 @@ function EntryCard({
       <div className="flex items-center justify-between gap-2">
         <TypeBadge type={entry.type} />
         <div className="flex items-center gap-2 shrink-0">
+          <ConfidenceBadge confidence={entry.confidence} />
           <PriorityDot priority={entry.priority} />
           <button
             onClick={e => { e.stopPropagation(); onDelete(); }}
@@ -306,6 +325,7 @@ function EntryForm({ initial, onSave, onCancel, isEditing }: EntryFormProps) {
         type:        extracted.type      || prev.type,
         implication: extracted.implication || prev.implication,
         priority:    extracted.priority  || prev.priority,
+        confidence:  extracted.confidence || prev.confidence,
       }));
       if (extracted.tags && extracted.tags.length > 0) {
         setTagsInput(extracted.tags.join(', '));
@@ -362,8 +382,8 @@ function EntryForm({ initial, onSave, onCancel, isEditing }: EntryFormProps) {
           onChange={e => { const f = e.target.files?.[0]; if (f) handleImageFile(f); }} />
       </div>
 
-      {/* Type + Priority */}
-      <div className="grid grid-cols-2 gap-3 shrink-0">
+      {/* Type + Priority + Confidence */}
+      <div className="grid grid-cols-3 gap-3 shrink-0">
         <div>
           <label className="block text-[10px] text-[#484848] font-semibold uppercase tracking-wider mb-1.5">Type</label>
           <select
@@ -387,6 +407,19 @@ function EntryForm({ initial, onSave, onCancel, isEditing }: EntryFormProps) {
               <option key={p} value={p}>{PRIORITY_CONFIG[p].label} — {PRIORITY_CONFIG[p].sublabel}</option>
             ))}
           </select>
+        </div>
+        <div>
+          <label className="block text-[10px] text-[#484848] font-semibold uppercase tracking-wider mb-1.5">Confidence</label>
+          <select
+            value={form.confidence}
+            onChange={e => set('confidence', e.target.value as BrainConfidence)}
+            className="w-full bg-[#111] border border-[#1e1e1e] text-[#d0d0d0] text-xs rounded-lg px-3 py-2 focus:outline-none focus:border-[#e05000]/60"
+          >
+            {ALL_CONFIDENCES.map(c => (
+              <option key={c} value={c}>{CONFIDENCE_CONFIG[c].label}</option>
+            ))}
+          </select>
+          <p className="text-[10px] text-[#2a2a2a] mt-1">{CONFIDENCE_CONFIG[form.confidence].title}</p>
         </div>
       </div>
 
@@ -501,6 +534,7 @@ function EntryDetail({
       <div className="flex-1 overflow-y-auto p-5 space-y-5">
         <div className="flex items-center gap-2">
           <PriorityDot priority={entry.priority} />
+          <ConfidenceBadge confidence={entry.confidence} />
           <span className="text-[10px] text-[#333]">
             Added {new Date(entry.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
           </span>
@@ -621,9 +655,12 @@ interface Props {
   onAdd: (entry: BrainEntry) => void;
   onUpdate: (entry: BrainEntry) => void;
   onDelete: (id: string) => void;
+  /** Pre-fill the entry form with this content (set by "Save to Brain" in chat). */
+  prefillContent?: string | null;
+  onClearPrefill?: () => void;
 }
 
-export function BrainView({ entries, onAdd, onUpdate, onDelete }: Props) {
+export function BrainView({ entries, onAdd, onUpdate, onDelete, prefillContent, onClearPrefill }: Props) {
   const [search, setSearch]               = useState('');
   const [filterType, setFilterType]       = useState<BrainEntryType | 'All'>('All');
   const [filterPriority, setFilterPriority] = useState<BrainPriority | 'All'>('All');
@@ -632,6 +669,17 @@ export function BrainView({ entries, onAdd, onUpdate, onDelete }: Props) {
   const [expandedId, setExpandedId]       = useState<string | null>(null);
   const [showCompile, setShowCompile]     = useState(false);
   const [formInitial, setFormInitial]     = useState<Omit<BrainEntry, 'id' | 'createdAt' | 'updatedAt'>>(EMPTY_FORM);
+
+  // When App.tsx pushes a prefill (from "Save to Brain" in chat), open form
+  useEffect(() => {
+    if (prefillContent) {
+      setFormInitial({ ...EMPTY_FORM, content: prefillContent, type: 'insight' });
+      setEditingEntry(null);
+      setShowForm(true);
+      onClearPrefill?.();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillContent]);
 
   const tokenCount = useMemo(() => estimateBrainTokens(entries), [entries]);
   const coreCount  = entries.filter(e => e.priority === 'core').length;
@@ -686,7 +734,7 @@ export function BrainView({ entries, onAdd, onUpdate, onDelete }: Props) {
     setFormInitial({
       type: entry.type, title: entry.title, content: entry.content,
       source: entry.source, implication: entry.implication, tags: entry.tags,
-      priority: entry.priority,
+      priority: entry.priority, confidence: entry.confidence,
     });
     setShowForm(true);
   };

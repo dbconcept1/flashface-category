@@ -22,7 +22,9 @@ import { FinanceView } from './views/FinanceView';
 import { BrandTrackerView } from './views/BrandTrackerView';
 import { CompanyProfilesView } from './views/CompanyProfilesView';
 import { IdeasView } from './views/IdeasView';
-import type { IntelNote, FinanceScenario, TrackedBrand, CompanyProfile, Idea, FounderPodcast, PodcastEpisode, BrainEntry } from './types';
+import type { IntelNote, FinanceScenario, TrackedBrand, CompanyProfile, Idea, FounderPodcast, PodcastEpisode, BrainEntry, BrainConversation } from './types';
+import { loadBestBrain, saveBrainAllLayers } from './lib/brainDb';
+import { loadBestConversations, saveConversationsAllLayers } from './lib/conversationDb';
 import { enrichNote } from './services/intelService';
 import { researchBrand } from './services/brandService';
 import type { BrandInput } from './services/brandService';
@@ -31,8 +33,12 @@ import { PodcastIntelView } from './views/PodcastIntelView';
 import { discoverFounderEpisodes, extractEpisodeInsights } from './services/podcastService';
 import { getSettings, calcBudgetPercent } from './lib/settings';
 import { useResearchSetter } from './lib/researchContext';
+import { FoundersView } from './views/FoundersView';
+import type { FounderProfile } from './types';
+import { scanCompanyReputation } from './services/reputationService';
+import { UserCircle2 } from 'lucide-react';
 
-type ViewMode = 'dashboard' | 'categories' | 'comparison' | 'edit' | 'import' | 'export' | 'prompts' | 'discovery' | 'settings' | 'chatgpt' | 'brain' | 'intel' | 'finance' | 'brands' | 'companies' | 'ideas' | 'podcasts';
+type ViewMode = 'dashboard' | 'categories' | 'comparison' | 'edit' | 'import' | 'export' | 'prompts' | 'discovery' | 'settings' | 'chatgpt' | 'brain' | 'intel' | 'finance' | 'brands' | 'companies' | 'ideas' | 'podcasts' | 'founders';
 
 const VIEW_TITLES: Partial<Record<ViewMode, string>> = {
   dashboard: 'Overview',
@@ -51,6 +57,7 @@ const VIEW_TITLES: Partial<Record<ViewMode, string>> = {
   companies: 'Company Intelligence',
   ideas: 'Ideas Board',
   podcasts: 'Podcast Intel',
+  founders: 'Founders',
 };
 
 export default function App() {
@@ -83,9 +90,8 @@ export default function App() {
   const [isBulkResearching, setIsBulkResearching] = useState(false);
   const [spendingRefresh, setSpendingRefresh] = useState(0);
   const [bulkStats, setBulkStats] = useState<{ total: number; done: number; failed: number } | null>(null);
-  const [brainEntries, setBrainEntries] = useState<BrainEntry[]>(() => {
-    try { return JSON.parse(localStorage.getItem('flashface_brain') || '[]'); } catch { return []; }
-  });
+  const [brainEntries, setBrainEntries] = useState<BrainEntry[]>([]);
+  const [conversations, setConversations] = useState<BrainConversation[]>([]);
   const [intelNotes, setIntelNotes] = useState<IntelNote[]>(() => {
     try { return JSON.parse(localStorage.getItem('flashface_intel_notes') || '[]'); } catch { return []; }
   });
@@ -101,6 +107,9 @@ export default function App() {
   const [ideas, setIdeas] = useState<Idea[]>(() => {
     try { return JSON.parse(localStorage.getItem('flashface_ideas') || '[]'); } catch { return []; }
   });
+  const [founders, setFounders] = useState<FounderProfile[]>(() => {
+    try { return JSON.parse(localStorage.getItem('flashface_founders') || '[]'); } catch { return []; }
+  });
   const [founderPodcasts, setFounderPodcasts] = useState<FounderPodcast[]>(() => {
     try { return JSON.parse(localStorage.getItem('flashface_podcasts') || '[]'); } catch { return []; }
   });
@@ -110,19 +119,65 @@ export default function App() {
   const [scanningFounderId, setScanningFounderId] = useState<string | null>(null);
   const [extractingEpisodeIds, setExtractingEpisodeIds] = useState<string[]>([]);
 
+  // ── Brain: 3-layer init + persist ───────────────────────────────────────────
+  const hasLoadedBrainRef = useRef(false);
+  // On mount: load from best available layer (API > IndexedDB > localStorage)
+  useEffect(() => {
+    loadBestBrain().then(({ entries, source }) => {
+      if (entries.length > 0) {
+        setBrainEntries(entries);
+        console.info(`[Brain] Loaded ${entries.length} entries from ${source}`);
+      }
+    }).finally(() => { hasLoadedBrainRef.current = true; });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // On change: save to all 3 layers (guarded to prevent overwriting on first render)
+  useEffect(() => {
+    if (!hasLoadedBrainRef.current) return;
+    saveBrainAllLayers(brainEntries);
+  }, [brainEntries]);
+
+  // ── Conversations: 3-layer init ──────────────────────────────────────────────
+  useEffect(() => {
+    loadBestConversations().then(({ conversations: best, source }) => {
+      if (best.length > 0) {
+        setConversations(best);
+        console.info(`[Conversations] Loaded ${best.length} from ${source}`);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Persist brain + intel + finance + brands + companies + ideas to localStorage
-  useEffect(() => { localStorage.setItem('flashface_brain', JSON.stringify(brainEntries)); }, [brainEntries]);
   useEffect(() => { localStorage.setItem('flashface_intel_notes', JSON.stringify(intelNotes)); }, [intelNotes]);
   useEffect(() => { localStorage.setItem('flashface_finance_scenarios', JSON.stringify(financeScenarios)); }, [financeScenarios]);
   useEffect(() => { localStorage.setItem('flashface_brands', JSON.stringify(trackedBrands)); }, [trackedBrands]);
   useEffect(() => { localStorage.setItem('flashface_companies', JSON.stringify(companyProfiles)); }, [companyProfiles]);
   useEffect(() => { localStorage.setItem('flashface_ideas', JSON.stringify(ideas)); }, [ideas]);
+  useEffect(() => { localStorage.setItem('flashface_founders', JSON.stringify(founders)); }, [founders]);
   useEffect(() => { localStorage.setItem('flashface_podcasts', JSON.stringify(founderPodcasts)); }, [founderPodcasts]);
   useEffect(() => { localStorage.setItem('flashface_podcast_episodes', JSON.stringify(podcastEpisodes)); }, [podcastEpisodes]);
 
   const handleAddBrainEntry   = (e: BrainEntry) => setBrainEntries(prev => [e, ...prev]);
   const handleUpdateBrainEntry = (e: BrainEntry) => setBrainEntries(prev => prev.map(x => x.id === e.id ? e : x));
   const handleDeleteBrainEntry = (id: string)    => setBrainEntries(prev => prev.filter(x => x.id !== id));
+
+  const handleSaveConversation = (conv: BrainConversation) => {
+    setConversations(prev => {
+      const exists = prev.some(c => c.id === conv.id);
+      const next = exists ? prev.map(c => c.id === conv.id ? conv : c) : [conv, ...prev];
+      saveConversationsAllLayers(next);
+      return next;
+    });
+  };
+
+  // When the user clicks "Save to Brain" on a chat message, navigate to Brain
+  // and pre-fill the entry form with the message content.
+  const [prefillBrainContent, setPrefillBrainContent] = useState<string | null>(null);
+  const handleSaveToBrain = (content: string) => {
+    setPrefillBrainContent(content);
+    setCurrentView('brain');
+  };
 
   const handleAddNote = (note: IntelNote) => setIntelNotes(prev => [note, ...prev]);
   const handleDeleteNote = (id: string) => setIntelNotes(prev => prev.filter(n => n.id !== id));
@@ -354,6 +409,25 @@ export default function App() {
           b.id === brand.id ? { ...b, status: 'error', error: e?.message ?? 'Scheduled research failed' } : b
         ));
       });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // On load: auto-scan reputation for companies with scheduledScan enabled and >7 days old
+  useEffect(() => {
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const due = companyProfiles.filter(p =>
+      p.scheduledScan &&
+      (!p.lastScanned || now - new Date(p.lastScanned).getTime() > SEVEN_DAYS_MS)
+    );
+    if (!due.length) return;
+    due.forEach(profile => {
+      scanCompanyReputation(profile.name, profile.url).then(scan => {
+        setCompanyProfiles(prev => prev.map(p =>
+          p.id === profile.id ? { ...p, reviewScan: scan, lastScanned: new Date().toISOString(), updatedAt: new Date().toISOString() } : p
+        ));
+      }).catch((e: any) => console.warn(`[Reputation] Scheduled scan failed for ${profile.name}:`, e?.message));
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -777,6 +851,13 @@ export default function App() {
                 onClick={() => setCurrentView('ideas')}
               />
               <NavItem
+                icon={<UserCircle2 className="w-[15px] h-[15px]" />}
+                label="Founders"
+                badge={founders.length > 0 ? founders.length : undefined}
+                active={currentView === 'founders'}
+                onClick={() => setCurrentView('founders')}
+              />
+              <NavItem
                 icon={<Headphones className="w-[15px] h-[15px]" />}
                 label="Podcast Intel"
                 badge={podcastEpisodes.filter(e => e.processingStatus === 'complete').length || undefined}
@@ -858,6 +939,11 @@ export default function App() {
               <div className="text-center py-1">
                 <p className="text-[10px] text-[#333] uppercase tracking-[0.1em] font-semibold">Ideas</p>
                 <p className="text-xs text-[#3a3a3a] mt-0.5">{ideas.filter(i => i.status !== 'killed').length} active</p>
+              </div>
+            ) : currentView === 'founders' ? (
+              <div className="text-center py-1">
+                <p className="text-[10px] text-[#333] uppercase tracking-[0.1em] font-semibold">Founders</p>
+                <p className="text-xs text-[#3a3a3a] mt-0.5">{founders.length} profile{founders.length !== 1 ? 's' : ''}</p>
               </div>
             ) : currentView === 'podcasts' ? (
               <div className="text-center py-1">
@@ -1030,12 +1116,13 @@ export default function App() {
             {currentView === 'export' && <ExportView categories={categories} />}
             {currentView === 'prompts' && <PromptsView />}
             {currentView === 'settings' && <SettingsView onRefreshSpending={() => setSpendingRefresh(v => v + 1)} />}
-            {currentView === 'chatgpt' && <ChatGPTView categories={categories} weights={weights} maxClv={maxClv} brainEntries={brainEntries} onGoToSettings={() => setCurrentView('settings')} onGoToBrain={() => setCurrentView('brain')} />}
-            {currentView === 'brain' && <BrainView entries={brainEntries} onAdd={handleAddBrainEntry} onUpdate={handleUpdateBrainEntry} onDelete={handleDeleteBrainEntry} />}
+            {currentView === 'chatgpt' && <ChatGPTView categories={categories} weights={weights} maxClv={maxClv} brainEntries={brainEntries} conversations={conversations} onGoToSettings={() => setCurrentView('settings')} onGoToBrain={() => setCurrentView('brain')} onSaveConversation={handleSaveConversation} onSaveToBrain={handleSaveToBrain} />}
+            {currentView === 'brain' && <BrainView entries={brainEntries} onAdd={handleAddBrainEntry} onUpdate={handleUpdateBrainEntry} onDelete={handleDeleteBrainEntry} prefillContent={prefillBrainContent} onClearPrefill={() => setPrefillBrainContent(null)} />}
             {currentView === 'intel' && <IntelView notes={intelNotes} onAdd={handleAddNote} onDelete={handleDeleteNote} onEnrich={handleEnrichNote} />}
             {currentView === 'brands' && <BrandTrackerView brands={trackedBrands} onAdd={handleAddBrand} onDelete={(id) => setTrackedBrands(prev => prev.filter(b => b.id !== id))} onRetry={handleRetryBrand} onAddToCategories={handleAddBrandToCategories} onToggleSchedule={handleToggleBrandSchedule} categories={categories} />}
             {currentView === 'companies' && <CompanyProfilesView profiles={companyProfiles} onChange={setCompanyProfiles} />}
             {currentView === 'ideas' && <IdeasView ideas={ideas} onAdd={(idea) => setIdeas(prev => [idea, ...prev])} onUpdate={(idea) => setIdeas(prev => prev.map(i => i.id === idea.id ? idea : i))} onDelete={(id) => setIdeas(prev => prev.filter(i => i.id !== id))} />}
+            {currentView === 'founders' && <FoundersView founders={founders} companies={companyProfiles} onChange={setFounders} />}
             {currentView === 'podcasts' && (
               <PodcastIntelView
                 founders={founderPodcasts}
