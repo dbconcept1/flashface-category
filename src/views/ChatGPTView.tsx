@@ -293,8 +293,8 @@ function CopyButton({ text, label, small }: { text: string; label: string; small
         'flex items-center gap-2 rounded-xl font-semibold transition-all duration-200',
         small ? 'px-3 py-2 text-xs' : 'px-4 py-2.5 text-sm',
         copied
-          ? 'bg-emerald-600/20 border border-emerald-500/40 text-emerald-400'
-          : 'bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white'
+          ? 'bg-emerald-600/20 border border-emerald-500/40 text-[#4ade80]'
+          : 'bg-[#1a1a1a] hover:bg-[#222] border border-[#252525] text-[#aaa] hover:text-[#f0f0f0]'
       )}
     >
       {copied ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -309,37 +309,37 @@ function SetupPanel({ categories, weights, maxClv }: { categories: Category[]; w
   const sessionData = buildSessionData(categories, weights, maxClv);
 
   return (
-    <div className="shrink-0 border-b border-gray-900 bg-[#080808]">
+    <div className="shrink-0 border-b border-[#141414] bg-[#080808]">
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center justify-between px-5 py-3 hover:bg-gray-900/40 transition-colors"
+        className="w-full flex items-center justify-between px-5 py-3 hover:bg-[#111]/40 transition-colors"
       >
         <div className="flex items-center gap-2.5">
-          <span className="text-[10px] font-mono text-gray-500 uppercase tracking-widest">Custom GPT Setup</span>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded border text-gray-500 bg-gray-900 border-gray-800">
+          <span className="text-[10px] font-mono text-[#484848] uppercase tracking-[0.1em]">Custom GPT Setup</span>
+          <span className="text-[10px] font-mono px-2 py-0.5 rounded border text-[#484848] bg-[#111] border-[#1e1e1e]">
             chatgpt.com
           </span>
         </div>
-        {open ? <ChevronUp className="w-3.5 h-3.5 text-gray-600" /> : <ChevronDown className="w-3.5 h-3.5 text-gray-600" />}
+        {open ? <ChevronUp className="w-3.5 h-3.5 text-[#3a3a3a]" /> : <ChevronDown className="w-3.5 h-3.5 text-[#3a3a3a]" />}
       </button>
 
       {open && (
         <div className="px-5 pb-5 space-y-4">
-          <p className="text-xs text-gray-500">
-            If you use <span className="text-gray-300">chatgpt.com</span> Custom GPTs, do this once to configure it, then paste session data each conversation.
+          <p className="text-xs text-[#484848]">
+            If you use <span className="text-[#aaa]">chatgpt.com</span> Custom GPTs, do this once to configure it, then paste session data each conversation.
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
+            <div className="bg-[#111] border border-[#1e1e1e] rounded-xl p-4 space-y-3">
               <div>
-                <p className="text-xs font-semibold text-white">Step 1 — One time</p>
-                <p className="text-[11px] text-gray-500 mt-0.5">Paste into your Custom GPT's <span className="text-gray-400">Instructions</span> field on chatgpt.com</p>
+                <p className="text-xs font-semibold text-[#f0f0f0]">Step 1 — One time</p>
+                <p className="text-[11px] text-[#484848] mt-0.5">Paste into your Custom GPT's <span className="text-[#666]">Instructions</span> field on chatgpt.com</p>
               </div>
               <CopyButton text={SYSTEM_PROMPT} label="Copy System Prompt" small />
             </div>
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
+            <div className="bg-[#111] border border-[#1e1e1e] rounded-xl p-4 space-y-3">
               <div>
-                <p className="text-xs font-semibold text-white">Step 2 — Each session</p>
-                <p className="text-[11px] text-gray-500 mt-0.5">Paste as your first message. ChatGPT instantly knows your full portfolio.</p>
+                <p className="text-xs font-semibold text-[#f0f0f0]">Step 2 — Each session</p>
+                <p className="text-[11px] text-[#484848] mt-0.5">Paste as your first message. ChatGPT instantly knows your full portfolio.</p>
               </div>
               <CopyButton text={sessionData} label={`Copy Session Data (${categories.length} categories)`} small />
             </div>
@@ -365,15 +365,15 @@ function MessageBubble({ msg }: { msg: Message }) {
     <div className={cn('flex items-start gap-3 px-4 py-3', isUser ? 'flex-row-reverse' : 'flex-row')}>
       <div className={cn(
         'flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center mt-0.5',
-        isUser ? 'bg-orange-600/30 border border-orange-500/40' : 'bg-gray-800 border border-gray-700'
+        isUser ? 'bg-[#e05000]/30 border border-[#e05000]/40' : 'bg-[#1a1a1a] border border-[#252525]'
       )}>
-        {isUser ? <User className="w-3.5 h-3.5 text-orange-400" /> : <Bot className="w-3.5 h-3.5 text-gray-400" />}
+        {isUser ? <User className="w-3.5 h-3.5 text-[#e05000]" /> : <Bot className="w-3.5 h-3.5 text-[#666]" />}
       </div>
       <div className={cn(
-        'max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed',
+        'max-w-[80%] rounded-xl px-4 py-3 text-sm leading-relaxed',
         isUser
-          ? 'bg-orange-600/15 border border-orange-500/20 text-orange-50 rounded-tr-sm'
-          : 'bg-gray-900 border border-gray-800 text-gray-200 rounded-tl-sm'
+          ? 'bg-[#e05000]/15 border border-[#e05000]/15 text-orange-50 rounded-tr-sm'
+          : 'bg-[#111] border border-[#1e1e1e] text-[#d0d0d0] rounded-tl-sm'
       )}>
         {msg.streaming && !msg.content ? (
           <div className="flex items-center gap-1.5 py-1">
@@ -548,26 +548,26 @@ export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Pro
       <div className="flex flex-col h-full">
         <SetupPanel categories={categories} weights={weights} maxClv={maxClv} />
         <div className="flex-1 flex items-center justify-center px-6">
-          <div className="max-w-md w-full bg-gray-950 border border-gray-800 rounded-2xl p-8 space-y-5 text-center">
+          <div className="max-w-md w-full bg-[#080808] border border-[#1e1e1e] rounded-xl p-8 space-y-5 text-center">
             <div className="w-12 h-12 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center mx-auto">
               <MessageSquare className="w-6 h-6 text-blue-400" />
             </div>
             <div className="space-y-2">
-              <h2 className="text-white font-bold text-lg">Add your OpenAI key for live chat</h2>
-              <p className="text-gray-400 text-sm">
+              <h2 className="text-[#f0f0f0] font-bold text-lg">Add your OpenAI key for live chat</h2>
+              <p className="text-[#666] text-sm">
                 Connects directly to GPT-4o with your full portfolio already in context — no copy-pasting.
-                Or use the <span className="text-gray-300">Custom GPT Setup</span> above with chatgpt.com.
+                Or use the <span className="text-[#aaa]">Custom GPT Setup</span> above with chatgpt.com.
               </p>
             </div>
             <button
               onClick={onGoToSettings}
-              className="flex items-center gap-2 mx-auto px-5 py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-semibold text-sm transition-colors"
+              className="flex items-center gap-2 mx-auto px-5 py-3 bg-[#e05000] hover:bg-[#e05000] text-[#f0f0f0] rounded-xl font-semibold text-sm transition-colors"
             >
               <Settings2 className="w-4 h-4" />
               Add OpenAI Key in Settings
             </button>
-            <p className="text-xs text-gray-600">
-              Get a key at <span className="text-gray-400 font-mono">platform.openai.com/api-keys</span>
+            <p className="text-xs text-[#3a3a3a]">
+              Get a key at <span className="text-[#666] font-mono">platform.openai.com/api-keys</span>
             </p>
           </div>
         </div>
@@ -582,19 +582,19 @@ export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Pro
       <SetupPanel categories={categories} weights={weights} maxClv={maxClv} />
 
       {/* Live chat header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-gray-900 bg-[#050505]/80 shrink-0">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-[#141414] bg-[#080808]/80 shrink-0">
         <div className="flex items-center gap-2.5">
           <div className="w-7 h-7 rounded-lg bg-blue-600/20 border border-blue-500/30 flex items-center justify-center">
             <MessageSquare className="w-3.5 h-3.5 text-blue-400" />
           </div>
-          <span className="text-white font-semibold text-sm">FlashFace × GPT-4o</span>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded border text-emerald-400 bg-emerald-500/10 border-emerald-500/20">
+          <span className="text-[#f0f0f0] font-semibold text-sm">FlashFace × GPT-4o</span>
+          <span className="text-[10px] font-mono px-2 py-0.5 rounded border text-[#4ade80] bg-[#4ade80]/08 border-[#4ade80]/15">
             {categories.filter(c => c.status !== 'Killed').length} categories in context
           </span>
         </div>
         <button
           onClick={handleNewConversation}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-900 hover:bg-gray-800 border border-gray-800 text-gray-400 hover:text-white rounded-lg text-xs font-medium transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-[#111] hover:bg-[#1a1a1a] border border-[#1e1e1e] text-[#666] hover:text-[#f0f0f0] rounded-lg text-xs font-medium transition-colors"
         >
           <Plus className="w-3.5 h-3.5" />
           New chat
@@ -609,13 +609,13 @@ export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Pro
       >
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full px-6 space-y-6">
-            <p className="text-gray-500 text-sm">Your full portfolio is loaded. Ask anything.</p>
+            <p className="text-[#484848] text-sm">Your full portfolio is loaded. Ask anything.</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-xl w-full">
               {STARTERS.map(s => (
                 <button
                   key={s}
                   onClick={() => sendMessage(s)}
-                  className="text-left px-4 py-3 bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-gray-700 rounded-xl text-xs text-gray-300 hover:text-white transition-all"
+                  className="text-left px-4 py-3 bg-[#111] hover:bg-[#1a1a1a] border border-[#1e1e1e] hover:border-[#252525] rounded-xl text-xs text-[#aaa] hover:text-[#f0f0f0] transition-all"
                 >
                   {s}
                 </button>
@@ -635,7 +635,7 @@ export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Pro
           <div className="sticky bottom-4 flex justify-center">
             <button
               onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
-              className="p-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-full text-gray-400 hover:text-white shadow-lg transition-colors"
+              className="p-2 bg-[#1a1a1a] hover:bg-[#222] border border-[#252525] rounded-full text-[#666] hover:text-[#f0f0f0] shadow-lg transition-colors"
             >
               <ChevronDown className="w-4 h-4" />
             </button>
@@ -645,17 +645,17 @@ export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Pro
 
       {/* Error */}
       {error && (
-        <div className="mx-4 mb-2 px-4 py-2.5 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-300 flex items-center gap-2">
-          <span className="text-rose-400">⚠</span>
+        <div className="mx-4 mb-2 px-4 py-2.5 bg-[#f87171]/08 border border-[#f87171]/15 rounded-xl text-xs text-rose-300 flex items-center gap-2">
+          <span className="text-[#f87171]">⚠</span>
           {error}
           <button onClick={() => setError(null)} className="ml-auto text-rose-500 hover:text-rose-300">✕</button>
         </div>
       )}
 
       {/* Input bar */}
-      <div className="shrink-0 border-t border-gray-900 bg-[#050505]/80 px-4 py-3">
+      <div className="shrink-0 border-t border-[#141414] bg-[#080808]/80 px-4 py-3">
         <div className="max-w-3xl mx-auto flex items-end gap-3">
-          <div className="flex-1 bg-gray-900 border border-gray-800 focus-within:border-orange-500/50 rounded-2xl px-4 py-3 transition-colors">
+          <div className="flex-1 bg-[#111] border border-[#1e1e1e] focus-within:border-[#e05000]/25 rounded-xl px-4 py-3 transition-colors">
             <textarea
               ref={textareaRef}
               rows={1}
@@ -664,14 +664,14 @@ export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Pro
               onKeyDown={handleKeyDown}
               placeholder="Ask about your portfolio… (Enter to send, Shift+Enter for newline)"
               disabled={isStreaming}
-              className="w-full bg-transparent text-white text-sm resize-none focus:outline-none placeholder-gray-600 leading-relaxed disabled:opacity-50"
+              className="w-full bg-transparent text-[#f0f0f0] text-sm resize-none focus:outline-none placeholder-gray-600 leading-relaxed disabled:opacity-50"
               style={{ minHeight: '24px', maxHeight: '160px' }}
             />
           </div>
           {isStreaming ? (
             <button
               onClick={() => abortRef.current?.abort()}
-              className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 rounded-xl text-rose-400 hover:text-rose-300 transition-colors"
+              className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 rounded-xl text-[#f87171] hover:text-rose-300 transition-colors"
               title="Stop"
             >
               <Square className="w-4 h-4 fill-current" />
@@ -680,14 +680,14 @@ export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Pro
             <button
               onClick={() => sendMessage(input)}
               disabled={!input.trim()}
-              className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-orange-600 hover:bg-orange-500 disabled:bg-gray-800 disabled:text-gray-600 border border-orange-500 disabled:border-gray-700 rounded-xl text-white transition-colors shadow-[0_0_15px_-5px_rgba(234,88,12,0.5)] disabled:shadow-none"
+              className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-[#e05000] hover:bg-[#e05000] disabled:bg-[#1a1a1a] disabled:text-[#3a3a3a] border border-[#e05000] disabled:border-[#252525] rounded-xl text-[#f0f0f0] transition-colors shadow-[0_0_15px_-5px_rgba(234,88,12,0.5)] disabled:shadow-none"
               title="Send (Enter)"
             >
               <Send className="w-4 h-4" />
             </button>
           )}
         </div>
-        <p className="text-center text-[10px] text-gray-700 mt-2">
+        <p className="text-center text-[10px] text-[#2a2a2a] mt-2">
           GPT-4o · Data sent to OpenAI per message · Conversations not stored
         </p>
       </div>

@@ -22,8 +22,8 @@ export function ComparisonView({ categories, weights, maxClv }: Props) {
 
   if (selectedCategories.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center p-12 bg-gray-900 border border-gray-800 rounded-lg">
-        <p className="text-gray-400 font-mono text-sm max-w-sm text-center">
+    <div className="flex flex-col items-center justify-center p-12 bg-[#0d0d0d] border border-[#1a1a1a] rounded-xl">
+        <p className="text-[#333] text-sm">
           No categories match the current filter.
         </p>
       </div>
@@ -48,22 +48,22 @@ export function ComparisonView({ categories, weights, maxClv }: Props) {
   };
 
   const getHeatmapClass = (val: number, arr: number[], higherIsBetter = true) => {
-    if (isBest(val, arr, higherIsBetter)) return "bg-emerald-500/10 text-emerald-400 font-bold border-emerald-500/30";
-    if (isWorst(val, arr, higherIsBetter)) return "bg-rose-500/10 text-rose-400 border-rose-500/20";
-    return "text-gray-300 border-transparent";
+    if (isBest(val, arr, higherIsBetter)) return "bg-[#4ade80]/08 text-[#4ade80] font-bold border-[#4ade80]/20";
+    if (isWorst(val, arr, higherIsBetter)) return "bg-[#f87171]/08 text-[#f87171] border-[#f87171]/15";
+    return "text-[#aaa] border-transparent";
   };
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-bold text-white tracking-tight">Executive Decision Matrix</h2>
-          <p className="text-sm text-gray-400">High-density "One Lens" comparison across all metrics.</p>
+          <h2 className="text-sm font-semibold text-[#d0d0d0] tracking-tight">Decision Matrix</h2>
+          <p className="text-xs text-[#444] mt-0.5">High-density one-lens comparison across all metrics.</p>
         </div>
         <select 
           value={filter}
           onChange={(e) => setFilter(e.target.value as any)}
-          className="bg-gray-900 border border-gray-800 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-orange-500 transition-colors"
+          className="bg-[#0d0d0d] border border-[#1a1a1a] text-[#d0d0d0] rounded-lg px-3 py-1.5 text-[13px] focus:outline-none focus:border-[#e05000]/40 transition-colors"
         >
           <option value="All">All Active Categories</option>
           <option value="Researching">Researching</option>
@@ -72,33 +72,33 @@ export function ComparisonView({ categories, weights, maxClv }: Props) {
         </select>
       </div>
 
-      <div className="bg-[#111111] border border-gray-800 shadow-2xl rounded-xl overflow-auto max-h-[calc(100vh-220px)]">
-        <table className="w-full text-left border-collapse whitespace-nowrap text-sm">
+      <div className="bg-[#080808] border border-[#141414] rounded-xl overflow-auto max-h-[calc(100vh-180px)]">
+        <table className="w-full text-left border-collapse whitespace-nowrap text-[13px]">
           <thead className="sticky top-0 z-10">
-            <tr className="bg-gray-900 border-b border-gray-800 text-xs text-gray-500 uppercase tracking-widest font-mono">
-              <th className="py-4 px-4 sticky left-0 z-20 bg-gray-900 shadow-[4px_0_12px_rgba(0,0,0,0.5)] border-r border-gray-800 cursor-help" title="The business category name">Category</th>
-              <th className="py-4 px-4 cursor-help" title="Score = (LTV:CAC ratio + Relative CLV + Market Size + Retention) multiplied by Qualitative Factors (Acquisition Difficulty, Brand Loyalty, Story Depth, etc).">Score</th>
-              <th className="py-4 px-4 cursor-help" title="Customer Lifetime Value divided by Customer Acquisition Cost. Healthy is >3x. 0 often means not enough sources found.">LTV:CAC</th>
-              <th className="py-4 px-4 cursor-help" title="Estimated Customer Lifetime Value in Euros. Calculated from recurring purchases or high initial ticket size.">Est. CLV</th>
-              <th className="py-4 px-4 cursor-help" title="Estimated Customer Acquisition Cost in Euros. Expected cost to acquire one buying user.">Est. CAC</th>
-              <th className="py-4 px-4 cursor-help" title="Estimated Monthly Churn Percentage. Lower is better. 0% may indicate a lack of sources or one-off purchases.">Churn</th>
-              <th className="py-4 px-4 cursor-help" title="Compound Annual Growth Rate">CAGR</th>
-              <th className="py-4 px-4 cursor-help" title="Global Market Size">Global Mkt</th>
-              <th className="py-4 px-4 cursor-help" title="European Union Market Size">EU Mkt</th>
-              <th className="py-4 px-4 cursor-help" title="Netherlands Market Size">NL Mkt</th>
-              <th className="py-4 px-4 cursor-help" title="TAM → SAM → SOM funnel. Hover individual cells to see the full step-by-step breakdown.">TAM→SOM</th>
-              <th className="py-4 px-4 cursor-help" title="Regulatory Risk in the NL. Low is better.">Reg. Risk</th>
-              <th className="py-4 px-4 cursor-help" title="Estimated difficulty of user acquisition.">Acq. Diff</th>
-              <th className="py-4 px-4 cursor-help" title="Estimated loyalty level of customers in this market.">Loyalty</th>
-              <th className="py-4 px-4 cursor-help" title="Micro-niche popularity scale (1-10)">Niche Pop</th>
+            <tr className="bg-[#080808] border-b border-[#141414] text-[10px] text-[#2e2e2e] uppercase tracking-[0.12em] font-medium">
+              <th className="py-2.5 px-3 sticky left-0 z-20 bg-[#080808] shadow-[4px_0_8px_rgba(0,0,0,0.7)] border-r border-[#141414] cursor-help" title="The business category name">Category</th>
+              <th className="py-2.5 px-3 cursor-help" title="Score = (LTV:CAC ratio + Relative CLV + Market Size + Retention) multiplied by Qualitative Factors (Acquisition Difficulty, Brand Loyalty, Story Depth, etc).">Score</th>
+              <th className="py-2.5 px-3 cursor-help" title="Customer Lifetime Value divided by Customer Acquisition Cost. Healthy is >3x. 0 often means not enough sources found.">LTV:CAC</th>
+              <th className="py-2.5 px-3 cursor-help" title="Estimated Customer Lifetime Value in Euros. Calculated from recurring purchases or high initial ticket size.">CLV</th>
+              <th className="py-2.5 px-3 cursor-help" title="Estimated Customer Acquisition Cost in Euros. Expected cost to acquire one buying user.">CAC</th>
+              <th className="py-2.5 px-3 cursor-help" title="Estimated Monthly Churn Percentage. Lower is better.">Churn</th>
+              <th className="py-2.5 px-3 cursor-help" title="Compound Annual Growth Rate">CAGR</th>
+              <th className="py-2.5 px-3 cursor-help" title="Global Market Size">Global</th>
+              <th className="py-2.5 px-3 cursor-help" title="European Union Market Size">EU</th>
+              <th className="py-2.5 px-3 cursor-help" title="Netherlands Market Size">NL</th>
+              <th className="py-2.5 px-3 cursor-help" title="TAM → SAM → SOM funnel.">TAM→SOM</th>
+              <th className="py-2.5 px-3 cursor-help" title="Regulatory Risk in the NL.">Reg.</th>
+              <th className="py-2.5 px-3 cursor-help" title="Estimated difficulty of user acquisition.">Acq.</th>
+              <th className="py-2.5 px-3 cursor-help" title="Estimated loyalty level of customers.">Loyalty</th>
+              <th className="py-2.5 px-3 cursor-help" title="Micro-niche popularity scale (1-10)">Niche</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-800/50">
+          <tbody className="divide-y divide-[#0f0f0f]">
             {selectedCategories.map(c => (
-              <tr key={c.id} className="group hover:bg-gray-800/30 transition-colors">
-                <td className="py-3 px-4 font-bold text-white sticky left-0 z-10 bg-[#111111] group-hover:bg-[#1a1a1a] shadow-[4px_0_12px_rgba(0,0,0,0.5)] border-r border-gray-800">
+              <tr key={c.id} className="group hover:bg-[#0d0d0d] transition-colors">
+                <td className="py-2 px-3 font-semibold text-[#d0d0d0] sticky left-0 z-10 bg-[#080808] group-hover:bg-[#0d0d0d] shadow-[4px_0_8px_rgba(0,0,0,0.7)] border-r border-[#141414]">
                   <div className="truncate w-48" title={c.name}>{c.name}</div>
-                  <div className="text-[10px] uppercase font-mono text-gray-500">{c.industry || 'Uncategorized'}</div>
+                  <div className="text-[10px] uppercase font-mono text-[#484848]">{c.industry || 'Uncategorized'}</div>
                 </td>
                 <td className="p-2">
                   <div className={cn("px-2 py-1 rounded inline-block text-center min-w-[3rem] font-mono border", getHeatmapClass(c.score, scores))}>
@@ -125,42 +125,42 @@ export function ComparisonView({ categories, weights, maxClv }: Props) {
                     {c.monthlyChurnPercent}%
                   </div>
                 </td>
-                <td className="p-2 px-4 text-gray-300 font-mono text-sm max-w-[120px] truncate" title={c.cagr}>{c.cagr || '-'}</td>
-                <td className="p-2 px-4 text-gray-300 font-mono text-sm max-w-[150px] truncate" title={c.marketSizeGlobal}>{c.marketSizeGlobal || '-'}</td>
-                <td className="p-2 px-4 text-gray-300 font-mono text-sm max-w-[120px] truncate" title={c.marketSizeEU}>{c.marketSizeEU || '-'}</td>
-                <td className="p-2 px-4 text-gray-300 font-mono text-sm max-w-[120px] truncate" title={c.marketSizeNL}>{c.marketSizeNL || '-'}</td>
+                <td className="p-2 px-4 text-[#aaa] font-mono text-sm max-w-[120px] truncate" title={c.cagr}>{c.cagr || '-'}</td>
+                <td className="p-2 px-4 text-[#aaa] font-mono text-sm max-w-[150px] truncate" title={c.marketSizeGlobal}>{c.marketSizeGlobal || '-'}</td>
+                <td className="p-2 px-4 text-[#aaa] font-mono text-sm max-w-[120px] truncate" title={c.marketSizeEU}>{c.marketSizeEU || '-'}</td>
+                <td className="p-2 px-4 text-[#aaa] font-mono text-sm max-w-[120px] truncate" title={c.marketSizeNL}>{c.marketSizeNL || '-'}</td>
                 <td className="p-2 px-4" title={c.funnelBreakdownNL || 'Run deep research to compute TAM→SAM→SOM funnel'}>
                   {c.somNL != null ? (
                     <div className="flex flex-col gap-0.5">
                       <div className="flex items-center gap-1 font-mono text-xs">
-                        <span className="text-gray-500">{(c.tamNL ?? 0).toLocaleString()}</span>
-                        <span className="text-gray-700">→</span>
-                        <span className="text-gray-400">{(c.samNL ?? 0).toLocaleString()}</span>
-                        <span className="text-gray-700">→</span>
-                        <span className="text-orange-400 font-bold">{c.somNL.toLocaleString()}</span>
+                        <span className="text-[#484848]">{(c.tamNL ?? 0).toLocaleString()}</span>
+                        <span className="text-[#2a2a2a]">→</span>
+                        <span className="text-[#666]">{(c.samNL ?? 0).toLocaleString()}</span>
+                        <span className="text-[#2a2a2a]">→</span>
+                        <span className="text-[#e05000] font-bold">{c.somNL.toLocaleString()}</span>
                       </div>
-                      <span className="text-[9px] uppercase tracking-wider text-gray-600">TAM → SAM → SOM</span>
+                      <span className="text-[9px] uppercase tracking-wider text-[#3a3a3a]">TAM → SAM → SOM</span>
                     </div>
                   ) : (
-                    <span className="text-gray-600 text-xs">-</span>
+                    <span className="text-[#3a3a3a] text-xs">-</span>
                   )}
                 </td>
                 <td className="p-2 px-4 font-medium">
-                  <span className={cn(c.regulatoryRiskNL === 'Low' ? 'text-emerald-400' : c.regulatoryRiskNL === 'High' ? 'text-rose-400' : 'text-orange-400')}>
+                  <span className={cn(c.regulatoryRiskNL === 'Low' ? 'text-[#4ade80]' : c.regulatoryRiskNL === 'High' ? 'text-[#f87171]' : 'text-[#e05000]')}>
                     {c.regulatoryRiskNL || '-'}
                   </span>
                 </td>
                 <td className="p-2 px-4 font-medium">
-                   <span className={cn(c.acquisitionDifficulty === 'Easy' ? 'text-emerald-400' : c.acquisitionDifficulty === 'Hard' ? 'text-rose-400' : 'text-gray-400')}>
+                   <span className={cn(c.acquisitionDifficulty === 'Easy' ? 'text-[#4ade80]' : c.acquisitionDifficulty === 'Hard' ? 'text-[#f87171]' : 'text-[#666]')}>
                     {c.acquisitionDifficulty}
                   </span>
                 </td>
                 <td className="p-2 px-4 font-medium">
-                    <span className={cn(c.emotionalLoyalty === 'High' ? 'text-emerald-400' : c.emotionalLoyalty === 'Low' ? 'text-rose-400' : 'text-gray-400')}>
+                    <span className={cn(c.emotionalLoyalty === 'High' ? 'text-[#4ade80]' : c.emotionalLoyalty === 'Low' ? 'text-[#f87171]' : 'text-[#666]')}>
                     {c.emotionalLoyalty}
                   </span>
                 </td>
-                <td className="p-2 px-4 text-gray-300 font-mono text-sm">{c.microNichePotential}/10</td>
+                <td className="p-2 px-4 text-[#aaa] font-mono text-sm">{c.microNichePotential}/10</td>
               </tr>
             ))}
           </tbody>

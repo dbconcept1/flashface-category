@@ -86,32 +86,32 @@ export function DiscoveryView({ isDiscovering, progress, error, onStart, onStop,
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-bold text-white tracking-tight">Autonomous Category Discovery Swarm</h2>
-          <p className="text-sm text-gray-400">Deploy agents across every consumer vertical to discover untracked niches.</p>
+          <h2 className="text-xl font-bold text-[#f0f0f0] tracking-tight">Autonomous Category Discovery Swarm</h2>
+          <p className="text-sm text-[#666]">Deploy agents across every consumer vertical to discover untracked niches.</p>
         </div>
         <button 
           onClick={onClose}
-          className="text-sm text-gray-500 hover:text-white"
+          className="text-sm text-[#484848] hover:text-[#f0f0f0]"
         >
           Back to Dashboard
         </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-[#111111] border border-gray-800 rounded-xl p-6">
-          <h3 className="text-sm font-bold uppercase tracking-widest text-gray-400 mb-4">Discovery Constraints & Prompt</h3>
+        <div className="bg-[#0d0d0d] border border-[#1e1e1e] rounded-xl p-6">
+          <h3 className="text-sm font-bold uppercase tracking-[0.1em] text-[#666] mb-4">Discovery Constraints & Prompt</h3>
           <textarea
             value={prompt}
             onChange={e => setPrompt(e.target.value)}
             disabled={isDiscovering}
-            className="w-full h-80 bg-gray-900 border border-gray-800 text-sm text-gray-300 rounded-lg p-4 font-mono focus:outline-none focus:border-orange-500 resize-none"
+            className="w-full h-80 bg-[#111] border border-[#1e1e1e] text-sm text-[#aaa] rounded-lg p-4 font-mono focus:outline-none focus:border-[#e05000] resize-none"
             placeholder="Enter the rules for the swarm..."
           />
           <div className="mt-4 flex justify-end">
             {!isDiscovering ? (
               <button
                 onClick={handleLaunchSwarm}
-                className="flex items-center px-4 py-2 bg-emerald-600/20 text-emerald-400 border border-emerald-500/50 rounded-lg font-bold hover:bg-emerald-600/30 transition-colors"
+                className="flex items-center px-4 py-2 bg-emerald-600/20 text-[#4ade80] border border-emerald-500/50 rounded-lg font-bold hover:bg-emerald-600/30 transition-colors"
                 title="Launch the AI Swarm to endlessly hunt for new categories"
               >
                 <Sparkles className="w-4 h-4 mr-2" />
@@ -120,7 +120,7 @@ export function DiscoveryView({ isDiscovering, progress, error, onStart, onStop,
             ) : (
               <button
                 onClick={handleStopSwarm}
-                className="flex items-center px-4 py-2 bg-rose-500/20 text-rose-400 border border-rose-500/50 rounded-lg font-bold hover:bg-rose-500/30 transition-colors shadow-[0_0_15px_-3px_rgba(244,63,94,0.5)]"
+                className="flex items-center px-4 py-2 bg-rose-500/20 text-[#f87171] border border-rose-500/50 rounded-lg font-bold hover:bg-rose-500/30 transition-colors shadow-[0_0_15px_-3px_rgba(244,63,94,0.5)]"
               >
                 <StopCircle className="w-4 h-4 mr-2" />
                 Abort Swarm
@@ -129,16 +129,16 @@ export function DiscoveryView({ isDiscovering, progress, error, onStart, onStop,
           </div>
         </div>
 
-        <div className="bg-[#111111] border border-gray-800 rounded-xl p-6 flex flex-col">
-          <h3 className="text-sm font-bold uppercase tracking-widest text-gray-400 mb-4">Live Swarm Feed</h3>
+        <div className="bg-[#0d0d0d] border border-[#1e1e1e] rounded-xl p-6 flex flex-col">
+          <h3 className="text-sm font-bold uppercase tracking-[0.1em] text-[#666] mb-4">Live Swarm Feed</h3>
           
-          <div className="flex-1 bg-gray-900 rounded-lg border border-gray-800 p-4 font-mono text-xs overflow-y-auto space-y-2 h-80">
+          <div className="flex-1 bg-[#111] rounded-lg border border-[#1e1e1e] p-4 font-mono text-xs overflow-y-auto space-y-2 h-80">
             {!isDiscovering && !progress && !error && (
-              <p className="text-gray-600">Awaiting swarm launch...</p>
+              <p className="text-[#3a3a3a]">Awaiting swarm launch...</p>
             )}
             
             {error && (
-              <div className="text-rose-400 flex items-start gap-2">
+              <div className="text-[#f87171] flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
                 <p>SYSTEM FAILURE: {error}</p>
               </div>
@@ -146,25 +146,25 @@ export function DiscoveryView({ isDiscovering, progress, error, onStart, onStop,
 
             {progress && (
               <div className="space-y-4">
-                <div className="text-orange-400 font-bold border-b border-orange-500/20 pb-2">
+                <div className="text-[#e05000] font-bold border-b border-[#e05000]/15 pb-2">
                   [MASTER CONTROL] {progress.status}
                 </div>
                 
                 {progress.industriesTrawled > 0 && (
-                  <p className="text-gray-400">
-                    Industries Scheduled: <span className="text-emerald-400">{progress.totalIndustries}</span> <br/>
-                    Successfully Trawled: <span className="text-emerald-400">{progress.industriesTrawled}</span>
+                  <p className="text-[#666]">
+                    Industries Scheduled: <span className="text-[#4ade80]">{progress.totalIndustries}</span> <br/>
+                    Successfully Trawled: <span className="text-[#4ade80]">{progress.industriesTrawled}</span>
                   </p>
                 )}
 
                 {progress.logs.map((log, i) => (
-                  <div key={i} className="text-gray-300">
+                  <div key={i} className="text-[#aaa]">
                     {log}
                   </div>
                 ))}
 
                 {isDiscovering && (
-                  <div className="flex gap-1 items-center mt-4 text-emerald-400">
+                  <div className="flex gap-1 items-center mt-4 text-[#4ade80]">
                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse delay-75" />
                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse delay-150" />

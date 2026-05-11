@@ -1,2 +1,51 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
+
+/* ─── Design Tokens ──────────────────────────────────────── */
+:root {
+  --bg-base: #080808;
+  --bg-surface: #0d0d0d;
+  --bg-card: #111111;
+  --bg-raised: #181818;
+  --border: #1e1e1e;
+  --border-mid: #252525;
+  --text-1: #f0f0f0;
+  --text-2: #888888;
+  --text-3: #484848;
+  --accent: #e05000;
+  --accent-dim: rgba(224, 80, 0, 0.08);
+  --positive: #4ade80;
+  --negative: #f87171;
+}
+
+/* ─── Base ───────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+
+body {
+  background: var(--bg-base);
+  color: var(--text-1);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.005em;
+}
+
+code, kbd, pre, .mono { font-family: 'JetBrains Mono', 'Fira Mono', monospace; }
+
+/* ─── Focus ──────────────────────────────────────────────── */
+*:focus-visible {
+  outline: 1px solid rgba(224, 80, 0, 0.55);
+  outline-offset: 2px;
+}
+
+/* ─── Scrollbar ──────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #222; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #2e2e2e; }
+
+/* ─── Selection ──────────────────────────────────────────── */
+::selection { background: rgba(224, 80, 0, 0.22); color: #f0f0f0; }

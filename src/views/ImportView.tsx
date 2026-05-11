@@ -418,11 +418,11 @@ export function ImportView({ onImport, state, setState, existingCategories }: Pr
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <div className="flex flex-col space-y-2">
-        <h2 className="text-3xl font-bold text-white capitalize tracking-tight flex items-center">
-          <Sparkles className="w-6 h-6 mr-3 text-orange-500" />
+        <h2 className="text-3xl font-bold text-[#f0f0f0] capitalize tracking-tight flex items-center">
+          <Sparkles className="w-6 h-6 mr-3 text-[#e05000]" />
           AI Document Queue
         </h2>
-        <p className="text-gray-400">
+        <p className="text-[#666]">
           Upload documents or paste messy notes. Our AI processes them in chunks, keeping track of exactly how much has been scanned and extracting all categories automatically.
         </p>
       </div>
@@ -431,9 +431,9 @@ export function ImportView({ onImport, state, setState, existingCategories }: Pr
         
         {/* Upload Area */}
         <div className="space-y-6">
-          <div className="bg-[#111111] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-6">
+          <div className="bg-[#0d0d0d] border border-[#1e1e1e] rounded-xl p-6 shadow-xl space-y-6">
             <div 
-              className={`border-2 border-dashed ${isDragging ? 'border-orange-500 bg-orange-500/10' : 'border-gray-700 hover:bg-gray-900/50 hover:border-orange-500/50'} rounded-xl p-8 transition-colors flex flex-col items-center justify-center cursor-pointer relative`}
+              className={`border-2 border-dashed ${isDragging ? 'border-[#e05000] bg-[#e05000]/08' : 'border-[#252525] hover:bg-[#111]/50 hover:border-[#e05000]/25'} rounded-xl p-8 transition-colors flex flex-col items-center justify-center cursor-pointer relative`}
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
@@ -445,19 +445,19 @@ export function ImportView({ onImport, state, setState, existingCategories }: Pr
                 onChange={handleFileUpload}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
               />
-              <UploadCloud className={`w-12 h-12 mb-4 ${isDragging ? 'text-orange-500' : 'text-gray-500'}`} />
-              <h3 className="text-lg font-bold text-gray-300">Drop files or screenshots here</h3>
-              <p className="text-sm text-gray-500 mt-1 text-center">
+              <UploadCloud className={`w-12 h-12 mb-4 ${isDragging ? 'text-[#e05000]' : 'text-[#484848]'}`} />
+              <h3 className="text-lg font-bold text-[#aaa]">Drop files or screenshots here</h3>
+              <p className="text-sm text-[#484848] mt-1 text-center">
                 Supports .txt, .md, .pdf, and images/screenshots.<br />It will be added to the queue automatically.
               </p>
             </div>
 
             <div className="relative">
               <div className="absolute inset-0 flex items-center" aria-hidden="true">
-                <div className="w-full border-t border-gray-800"></div>
+                <div className="w-full border-t border-[#1e1e1e]"></div>
               </div>
               <div className="relative flex justify-center">
-                <span className="px-2 bg-[#111111] text-xs text-gray-500 uppercase tracking-widest font-bold">OR PASTE TEXT</span>
+                <span className="px-2 bg-[#0d0d0d] text-xs text-[#484848] uppercase tracking-[0.1em] font-bold">OR PASTE TEXT</span>
               </div>
             </div>
 
@@ -466,14 +466,14 @@ export function ImportView({ onImport, state, setState, existingCategories }: Pr
                 value={manualText}
                 onChange={(e) => setManualText(e.target.value)}
                 placeholder="Paste your chaotic list of ideas, research notes, or unstructured data..."
-                className="w-full h-40 bg-gray-900 border border-gray-800 text-white rounded-xl p-4 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-colors resize-none text-sm placeholder-gray-600"
+                className="w-full h-40 bg-[#111] border border-[#1e1e1e] text-[#f0f0f0] rounded-xl p-4 focus:outline-none focus:border-[#e05000] focus:ring-1 focus:ring-[#e05000] transition-colors resize-none text-sm placeholder-gray-600"
               ></textarea>
               
               <div className="flex justify-end">
                 <button 
                     onClick={handleManualExtract}
                     disabled={!manualText.trim()}
-                    className="flex items-center px-6 py-3 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-bold transition-all shadow-[0_0_20px_-5px_rgba(234,88,12,0.5)]"
+                    className="flex items-center px-6 py-3 bg-[#e05000] hover:bg-[#e05000] disabled:opacity-50 disabled:cursor-not-allowed text-[#f0f0f0] rounded-xl font-bold transition-all shadow-none"
                   >
                     <FileText className="w-5 h-5 mr-3" />
                     Queue Extraction
@@ -484,56 +484,56 @@ export function ImportView({ onImport, state, setState, existingCategories }: Pr
         </div>
 
         {/* Processing Queue */}
-        <div className="bg-[#111111] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-6 flex flex-col max-h-[700px]">
-          <h3 className="text-xl font-bold text-gray-300 border-b border-gray-800 pb-4">Document Queue</h3>
+        <div className="bg-[#0d0d0d] border border-[#1e1e1e] rounded-xl p-6 shadow-xl space-y-6 flex flex-col max-h-[700px]">
+          <h3 className="text-xl font-bold text-[#aaa] border-b border-[#1e1e1e] pb-4">Document Queue</h3>
           
           <div className="flex-1 overflow-y-auto space-y-4 pr-2">
             {tasks.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
+              <div className="text-center py-12 text-[#484848]">
                 <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
                 <p>No documents in queue.</p>
               </div>
             ) : (
               tasks.map(task => (
-                <div key={task.id} className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
+                <div key={task.id} className="bg-[#111] border border-[#1e1e1e] rounded-xl p-4 space-y-3">
                   <div className="flex justify-between items-start">
                     <div>
-                      <h4 className="text-white font-bold max-w-[200px] xl:max-w-xs truncate" title={task.filename}>{task.filename}</h4>
-                      <p className="text-xs text-orange-400 mt-1 uppercase tracking-wider font-mono">Status: {task.status}</p>
+                      <h4 className="text-[#f0f0f0] font-bold max-w-[200px] xl:max-w-xs truncate" title={task.filename}>{task.filename}</h4>
+                      <p className="text-xs text-[#e05000] mt-1 uppercase tracking-wider font-mono">Status: {task.status}</p>
                     </div>
                     <div className="text-right">
-                      <span className="text-3xl font-mono text-emerald-400 font-bold">{task.categoriesFound}</span>
-                      <p className="text-[10px] text-gray-500 uppercase tracking-widest">Cat. Found</p>
+                      <span className="text-3xl font-mono text-[#4ade80] font-bold">{task.categoriesFound}</span>
+                      <p className="text-[10px] text-[#484848] uppercase tracking-[0.1em]">Cat. Found</p>
                     </div>
                   </div>
 
-                  <div className="text-sm text-gray-400 font-medium font-mono">
+                  <div className="text-sm text-[#666] font-medium font-mono">
                     {task.progressText}
                   </div>
 
                   {/* Progress bar — visible while extracting and on completion */}
                   {task.scanPercent !== undefined && (
                     <div className="space-y-1">
-                      <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                      <div className="w-full bg-[#1a1a1a] rounded-full h-1.5 overflow-hidden">
                         <div
-                          className={`h-full rounded-full transition-all duration-500 ${task.status === 'completed' ? 'bg-emerald-500' : 'bg-orange-500'}`}
+                          className={`h-full rounded-full transition-all duration-500 ${task.status === 'completed' ? 'bg-emerald-500' : 'bg-[#e05000]'}`}
                           style={{ width: `${task.scanPercent}%` }}
                         />
                       </div>
-                      <p className="text-[10px] text-gray-600 font-mono text-right">{task.scanPercent}% scanned</p>
+                      <p className="text-[10px] text-[#3a3a3a] font-mono text-right">{task.scanPercent}% scanned</p>
                     </div>
                   )}
 
                   {task.error && (
-                    <div className="text-xs text-rose-400 bg-rose-500/10 p-2 rounded border border-rose-500/20">
+                    <div className="text-xs text-[#f87171] bg-[#f87171]/08 p-2 rounded border border-[#f87171]/15">
                       {task.error}
                     </div>
                   )}
 
-                  <div className="flex justify-end pt-2 border-t border-gray-800">
+                  <div className="flex justify-end pt-2 border-t border-[#1e1e1e]">
                      <button
                         onClick={() => toggleTaskStatus(task.id)}
-                        className="flex items-center text-xs px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors border border-gray-700"
+                        className="flex items-center text-xs px-3 py-1.5 bg-[#1a1a1a] hover:bg-[#222] text-[#aaa] rounded-lg transition-colors border border-[#252525]"
                       >
                        {task.status === 'extracting' ? (
                          <><Pause className="w-3 h-3 mr-2" /> Pause</>

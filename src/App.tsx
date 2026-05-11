@@ -10,16 +10,39 @@ import { ExportView } from './views/ExportView';
 import { PromptsView } from './views/PromptsView';
 import { DiscoveryView } from './views/DiscoveryView';
 import { cn } from './utils';
-import { Target, LayoutGrid, BarChart2, Plus, Settings2, FileText, DownloadCloud, Loader2, Terminal, Radar, Menu, CheckCircle2, AlertCircle, Cloud, Euro, MessageSquare } from 'lucide-react';
+import { Target, LayoutGrid, BarChart2, Plus, Settings2, FileText, DownloadCloud, Loader2, Terminal, Radar, Menu, CheckCircle2, AlertCircle, Cloud, Euro, MessageSquare, Brain, TrendingUp } from 'lucide-react';
 import { agenticDeepResearchCategory, discoverDtcCategories, createInitialProgress } from './services/aiService';
 import stringSimilarity from 'string-similarity';
 import { lsLoadCategories, saveAllLayers, loadBestCategories, flushGithubSave } from './lib/db';
 import { SettingsView } from './views/SettingsView';
 import { ChatGPTView } from './views/ChatGPTView';
+import { IntelView } from './views/IntelView';
+import { FinanceView } from './views/FinanceView';
+import { BrandTrackerView } from './views/BrandTrackerView';
+import type { IntelNote, FinanceScenario, TrackedBrand } from './types';
+import { enrichNote } from './services/intelService';
+import { researchBrand } from './services/brandService';
+import type { BrandInput } from './services/brandService';
+import { Store } from 'lucide-react';
 import { getSettings, calcBudgetPercent } from './lib/settings';
 import { useResearchSetter } from './lib/researchContext';
 
-type ViewMode = 'dashboard' | 'categories' | 'comparison' | 'edit' | 'import' | 'export' | 'prompts' | 'discovery' | 'settings' | 'chatgpt';
+type ViewMode = 'dashboard' | 'categories' | 'comparison' | 'edit' | 'import' | 'export' | 'prompts' | 'discovery' | 'settings' | 'chatgpt' | 'intel' | 'finance' | 'brands';
+
+const VIEW_TITLES: Partial<Record<ViewMode, string>> = {
+  dashboard: 'Overview',
+  categories: 'Categories',
+  comparison: 'Comparison Matrix',
+  discovery: 'Discovery Swarm',
+  import: 'Import Data',
+  export: 'Export Data',
+  prompts: 'AI Prompts',
+  chatgpt: 'AI Assistant',
+  settings: 'Settings',
+  intel: 'Intel Brain',
+  finance: 'Financial Model',
+  brands: 'Brand Tracker',
+};
 
 export default function App() {
   // Layer 3 (localStorage) is the only synchronous source — used for instant first render.
@@ -51,6 +74,79 @@ export default function App() {
   const [isBulkResearching, setIsBulkResearching] = useState(false);
   const [spendingRefresh, setSpendingRefresh] = useState(0);
   const [bulkStats, setBulkStats] = useState<{ total: number; done: number; failed: number } | null>(null);
+  const [intelNotes, setIntelNotes] = useState<IntelNote[]>(() => {
+    try { return JSON.parse(localStorage.getItem('flashface_intel_notes') || '[]'); } catch { return []; }
+  });
+  const [financeScenarios, setFinanceScenarios] = useState<FinanceScenario[]>(() => {
+    try { return JSON.parse(localStorage.getItem('flashface_finance_scenarios') || '[]'); } catch { return []; }
+  });
+  const [trackedBrands, setTrackedBrands] = useState<TrackedBrand[]>(() => {
+    try { return JSON.parse(localStorage.getItem('flashface_brands') || '[]'); } catch { return []; }
+  });
+
+  // Persist intel + finance + brands to localStorage
+  useEffect(() => { localStorage.setItem('flashface_intel_notes', JSON.stringify(intelNotes)); }, [intelNotes]);
+  useEffect(() => { localStorage.setItem('flashface_finance_scenarios', JSON.stringify(financeScenarios)); }, [financeScenarios]);
+  useEffect(() => { localStorage.setItem('flashface_brands', JSON.stringify(trackedBrands)); }, [trackedBrands]);
+
+  const handleAddNote = (note: IntelNote) => setIntelNotes(prev => [note, ...prev]);
+  const handleDeleteNote = (id: string) => setIntelNotes(prev => prev.filter(n => n.id !== id));
+  const handleAddScenario = (s: FinanceScenario) => setFinanceScenarios(prev => [s, ...prev]);
+  const handleDeleteScenario = (id: string) => setFinanceScenarios(prev => prev.filter(s => s.id !== id));
+
+  const handleEnrichNote = async (id: string) => {
+    const note = intelNotes.find(n => n.id === id);
+    if (!note) return;
+    const enrichment = await enrichNote(note.content);
+    setIntelNotes(prev => prev.map(n => n.id === id
+      ? {
+          ...n,
+          ...enrichment,
+          title: n.title || enrichment.suggestedTitle,
+          source: n.source || enrichment.suggestedSource,
+          tags: [...new Set([...n.tags, ...enrichment.suggestedTags])],
+          updatedAt: new Date().toISOString(),
+        }
+      : n
+    ));
+  };
+
+  const handleAddBrand = (input: BrandInput) => {
+    const id = crypto.randomUUID();
+    const brand: TrackedBrand = { id, ...input, status: 'researching', createdAt: new Date().toISOString() };
+    setTrackedBrands(prev => [brand, ...prev]);
+    researchBrand(input).then(result => {
+      setTrackedBrands(prev => prev.map(b => b.id === id ? { ...b, ...result, status: 'complete' } : b));
+    }).catch((e: any) => {
+      setTrackedBrands(prev => prev.map(b => b.id === id ? { ...b, status: 'error', error: e?.message ?? 'Research failed' } : b));
+    });
+  };
+
+  const handleRetryBrand = (id: string) => {
+    const brand = trackedBrands.find(b => b.id === id);
+    if (!brand) return;
+    setTrackedBrands(prev => prev.map(b => b.id === id ? { ...b, status: 'researching', error: undefined } : b));
+    researchBrand({ name: brand.name, url: brand.url, userDescription: brand.userDescription }).then(result => {
+      setTrackedBrands(prev => prev.map(b => b.id === id ? { ...b, ...result, status: 'complete' } : b));
+    }).catch((e: any) => {
+      setTrackedBrands(prev => prev.map(b => b.id === id ? { ...b, status: 'error', error: e?.message ?? 'Research failed' } : b));
+    });
+  };
+
+  const handleAddBrandToCategories = (brand: TrackedBrand) => {
+    const catId = crypto.randomUUID();
+    handleImport([{
+      id: catId,
+      name: brand.detectedCategory || brand.name,
+      industry: brand.detectedIndustry,
+      targetAudience: brand.targetAudience || '',
+      estimatedCLV: brand.estimatedCLV || 0,
+      estimatedCAC: brand.estimatedCAC || 0,
+      notes: `Brand Intel: ${brand.name}\n\n${brand.aiSummary || ''}`,
+    }]);
+    setTrackedBrands(prev => prev.map(b => b.id === brand.id ? { ...b, linkedCategoryId: catId } : b));
+  };
+
   const [isMainSidebarOpen, setIsMainSidebarOpen] = useState(true);
   const [discoveryProgress, setDiscoveryProgress] = useState<import('./services/aiService').DiscoveryProgress | null>(null);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
@@ -453,87 +549,150 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#050505] text-gray-200 font-sans selection:bg-orange-500/30 selection:text-orange-200">
+    <div className="min-h-screen bg-[#080808] text-[#f0f0f0] font-sans">
       
       {/* Sidebar Layout */}
       <div className="flex h-screen overflow-hidden">
         
         {/* Left Sidebar */}
         <aside className={cn(
-          "bg-gray-950 border-r border-gray-900 flex flex-col z-50 transition-all duration-300 relative",
+          "bg-[#080808] border-r border-[#1a1a1a] flex flex-col z-50 transition-all duration-200 relative",
           isMainSidebarOpen ? "w-64" : "w-0 overflow-hidden border-none"
         )}>
-          <div className="h-16 flex items-center px-6 border-b border-gray-900 w-64 shrink-0 justify-between">
-            <span className="font-extrabold tracking-wider text-xl">
-              <span className="text-orange-500">FLASH</span><span className="text-white">FACE</span>
+          <div className="h-12 flex items-center px-5 border-b border-[#1a1a1a] w-64 shrink-0 justify-between">
+            <span className="font-extrabold tracking-[0.1em] text-[15px] leading-none">
+              <span className="text-[#e05000]">FLASH</span><span className="text-[#f0f0f0]">FACE</span>
             </span>
           </div>
 
-          <nav className="flex-1 py-6 px-4 space-y-2 w-64 shrink-0 overflow-y-auto">
-            <NavItem 
-              icon={<Target className="w-5 h-5" />} 
-              label="Dashboard" 
-              active={currentView === 'dashboard'} 
-              onClick={() => setCurrentView('dashboard')} 
-            />
-            <NavItem 
-              icon={<LayoutGrid className="w-5 h-5" />} 
-              label="All Categories" 
-              active={currentView === 'categories'} 
-              onClick={() => setCurrentView('categories')} 
-            />
-            <NavItem 
-              icon={<BarChart2 className="w-5 h-5" />} 
-              label="Comparison Matrix" 
-              active={currentView === 'comparison'} 
-              onClick={() => setCurrentView('comparison')} 
-            />
-            <NavItem 
-              icon={<Radar className={`w-5 h-5 ${isDiscovering ? 'animate-pulse text-emerald-400' : ''}`} />} 
-              label="Discovery Swarm" 
-              active={currentView === 'discovery'} 
-              onClick={() => setCurrentView('discovery')} 
-            />
-            <NavItem 
-              icon={importState.tasks.some(t => t.status === 'extracting') ? <Loader2 className="w-5 h-5 animate-spin text-orange-500" /> : <FileText className="w-5 h-5" />} 
-              label="Import Data" 
-              active={currentView === 'import'} 
-              onClick={() => setCurrentView('import')} 
-            />
-            <NavItem 
-              icon={<DownloadCloud className="w-5 h-5" />} 
-              label="Export Data" 
-              active={currentView === 'export'} 
-              onClick={() => setCurrentView('export')} 
-            />
-            <NavItem 
-              icon={<Terminal className="w-5 h-5" />} 
-              label="AI Prompts" 
-              active={currentView === 'prompts'} 
-              onClick={() => setCurrentView('prompts')} 
-            />
-            <NavItem 
-              icon={<MessageSquare className="w-5 h-5" />} 
-              label="ChatGPT" 
-              active={currentView === 'chatgpt'} 
-              onClick={() => setCurrentView('chatgpt')} 
-            />
-            <NavItem 
-              icon={<Settings2 className="w-5 h-5" />} 
-              label="Settings" 
-              active={currentView === 'settings'} 
-              onClick={() => setCurrentView('settings')} 
-            />
+          <nav className="flex-1 py-3 px-2.5 w-64 shrink-0 overflow-y-auto space-y-4">
+
+            <NavSection label="Command">
+              <NavItem
+                icon={<Target className="w-[15px] h-[15px]" />}
+                label="Overview"
+                active={currentView === 'dashboard'}
+                onClick={() => setCurrentView('dashboard')}
+              />
+              <NavItem
+                icon={<MessageSquare className="w-[15px] h-[15px]" />}
+                label="AI Assistant"
+                active={currentView === 'chatgpt'}
+                onClick={() => setCurrentView('chatgpt')}
+              />
+            </NavSection>
+
+            <NavSection label="Market Research">
+              <NavItem
+                icon={<LayoutGrid className="w-[15px] h-[15px]" />}
+                label="Categories"
+                active={currentView === 'categories'}
+                onClick={() => setCurrentView('categories')}
+              />
+              <NavItem
+                icon={<Radar className={`w-[15px] h-[15px] ${isDiscovering ? 'animate-pulse text-[#4ade80]' : ''}`} />}
+                label="Discovery Swarm"
+                active={currentView === 'discovery'}
+                onClick={() => setCurrentView('discovery')}
+              />
+              <NavItem
+                icon={<BarChart2 className="w-[15px] h-[15px]" />}
+                label="Comparison"
+                active={currentView === 'comparison'}
+                onClick={() => setCurrentView('comparison')}
+              />
+            </NavSection>
+
+            <NavSection label="Intel Brain">
+              <NavItem
+                icon={<Brain className="w-[15px] h-[15px]" />}
+                label="Knowledge Base"
+                badge={intelNotes.length > 0 ? intelNotes.length : undefined}
+                active={currentView === 'intel'}
+                onClick={() => setCurrentView('intel')}
+              />
+              <NavItem
+                icon={<Store className="w-[15px] h-[15px]" />}
+                label="Brand Tracker"
+                badge={trackedBrands.length > 0 ? trackedBrands.length : undefined}
+                active={currentView === 'brands'}
+                onClick={() => setCurrentView('brands')}
+              />
+              <NavItem
+                icon={importState.tasks.some(t => t.status === 'extracting')
+                  ? <Loader2 className="w-[15px] h-[15px] animate-spin text-[#e05000]" />
+                  : <FileText className="w-[15px] h-[15px]" />}
+                label="Import Data"
+                active={currentView === 'import'}
+                onClick={() => setCurrentView('import')}
+              />
+            </NavSection>
+
+            <NavSection label="Finance">
+              <NavItem
+                icon={<TrendingUp className="w-[15px] h-[15px]" />}
+                label="Financial Model"
+                active={currentView === 'finance'}
+                onClick={() => setCurrentView('finance')}
+              />
+            </NavSection>
+
+            <NavSection label="System">
+              <NavItem
+                icon={<Terminal className="w-[15px] h-[15px]" />}
+                label="AI Prompts"
+                active={currentView === 'prompts'}
+                onClick={() => setCurrentView('prompts')}
+              />
+              <NavItem
+                icon={<DownloadCloud className="w-[15px] h-[15px]" />}
+                label="Export"
+                active={currentView === 'export'}
+                onClick={() => setCurrentView('export')}
+              />
+              <NavItem
+                icon={<Settings2 className="w-[15px] h-[15px]" />}
+                label="Settings"
+                active={currentView === 'settings'}
+                onClick={() => setCurrentView('settings')}
+              />
+            </NavSection>
+
           </nav>
 
-          <div className="p-4 border-t border-gray-900 w-64 shrink-0">
-            <button 
-              onClick={() => openEditor(null)}
-              className="w-full flex items-center justify-center p-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-medium transition-colors border border-orange-500 shadow-[0_0_20px_-5px_rgba(234,88,12,0.5)]"
-            >
-              <Plus className="w-5 h-5 mr-2" />
-              New Category
-            </button>
+          <div className="p-3 border-t border-[#1a1a1a] w-64 shrink-0">
+            {['categories', 'comparison', 'discovery', 'dashboard'].includes(currentView) ? (
+              <button
+                onClick={() => openEditor(null)}
+                className="w-full flex items-center justify-center gap-2 py-2.5 bg-[#e05000] hover:bg-[#c74800] text-[#f0f0f0] rounded-lg text-sm font-semibold transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                New Category
+              </button>
+            ) : currentView === 'intel' ? (
+              <div className="text-center py-1">
+                <p className="text-[10px] text-[#333] uppercase tracking-[0.1em] font-semibold">Intel Brain</p>
+                <p className="text-xs text-[#3a3a3a] mt-0.5">{intelNotes.length} note{intelNotes.length !== 1 ? 's' : ''}</p>
+              </div>
+            ) : currentView === 'brands' ? (
+              <div className="text-center py-1">
+                <p className="text-[10px] text-[#333] uppercase tracking-[0.1em] font-semibold">Brand Tracker</p>
+                <p className="text-xs text-[#3a3a3a] mt-0.5">{trackedBrands.length} brand{trackedBrands.length !== 1 ? 's' : ''}</p>
+              </div>
+            ) : currentView === 'finance' ? (
+              <div className="text-center py-1">
+                <p className="text-[10px] text-[#333] uppercase tracking-[0.1em] font-semibold">Finance</p>
+                <p className="text-xs text-[#3a3a3a] mt-0.5">{financeScenarios.length} scenario{financeScenarios.length !== 1 ? 's' : ''}</p>
+              </div>
+            ) : (
+              <button
+                onClick={() => openEditor(null)}
+                className="w-full flex items-center justify-center gap-2 py-2.5 bg-[#141414] hover:bg-[#1c1c1c] text-[#666] hover:text-[#aaa] rounded-lg text-sm font-medium transition-colors border border-[#1e1e1e]"
+              >
+                <Plus className="w-4 h-4" />
+                New Category
+              </button>
+            )}
           </div>
         </aside>
 
@@ -541,29 +700,31 @@ export default function App() {
         <div className="flex-1 flex flex-col h-screen overflow-hidden relative">
           
           {/* Top Header */}
-          <header className="h-16 bg-[#050505]/80 backdrop-blur-md border-b border-gray-900 flex items-center justify-between px-4 lg:px-8 z-10 shrink-0">
-            <div className="flex items-center space-x-4">
+          <header className="h-12 bg-[#080808] border-b border-[#1a1a1a] flex items-center justify-between px-4 lg:px-6 z-10 shrink-0">
+            <div className="flex items-center space-x-3">
               <button 
                 onClick={() => setIsMainSidebarOpen(!isMainSidebarOpen)}
-                className="p-2 bg-gray-900 hover:bg-gray-800 border border-gray-800 text-gray-400 hover:text-white rounded-lg transition-colors"
+                className="p-1.5 bg-[#111] hover:bg-[#1a1a1a] border border-[#1e1e1e] text-[#555] hover:text-[#aaa] rounded-md transition-colors"
                 title="Toggle Main Menu"
               >
-                <Menu className="w-5 h-5" />
+                <Menu className="w-4 h-4" />
               </button>
-              <h1 className="text-xl font-bold text-white capitalize">
-                {currentView === 'edit' ? (editingId ? 'Edit Category' : 'New Category') : currentView.replace('-', ' ')}
+              <h1 className="text-sm font-semibold text-[#f0f0f0] tracking-tight">
+                {currentView === 'edit'
+                  ? (editingId ? 'Edit Category' : 'New Category')
+                  : (VIEW_TITLES[currentView] ?? currentView)}
               </h1>
             </div>
             
-            <div className="flex items-center gap-3">                {/* Bulk research progress — visible on every tab while a queue is running */}
+            <div className="flex items-center gap-2">                {/* Bulk research progress — visible on every tab while a queue is running */}
                 {(isBulkResearching || bulkStats) && (
                   <div className={cn(
-                    "hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono border",
+                    "hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono border",
                     isBulkResearching
-                      ? "bg-orange-500/10 border-orange-500/25 text-orange-400"
+                      ? "bg-[#e05000]/08 border-[#e05000]/20 text-[#e05000]"
                       : bulkStats && bulkStats.failed > 0
-                      ? "bg-rose-500/10 border-rose-500/25 text-rose-400"
-                      : "bg-emerald-500/10 border-emerald-500/25 text-emerald-400"
+                      ? "bg-[#f87171]/08 border-[#f87171]/20 text-[#f87171]"
+                      : "bg-[#4ade80]/08 border-[#4ade80]/20 text-[#4ade80]"
                   )}>
                     {isBulkResearching
                       ? <Loader2 className="w-3 h-3 animate-spin shrink-0" />
@@ -584,7 +745,7 @@ export default function App() {
                     {isBulkResearching && (
                       <button
                         onClick={handleStopBulkResearch}
-                        className="ml-1 text-gray-500 hover:text-rose-400 transition-colors font-bold"
+                        className="ml-0.5 text-[#555] hover:text-[#f87171] transition-colors font-bold"
                         title="Stop bulk research"
                       >×</button>
                     )}
@@ -602,10 +763,10 @@ export default function App() {
                     onClick={() => setCurrentView('settings')}
                     title="API spending — click to open Settings"
                     className={cn(
-                      "hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono border transition-colors",
-                      pct >= 100 ? "bg-rose-500/10 border-rose-500/25 text-rose-400" :
-                      pct >= 80  ? "bg-orange-500/10 border-orange-500/25 text-orange-400" :
-                                   "bg-gray-900 border-gray-800 text-gray-400 hover:text-gray-200"
+                      "hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono border transition-colors",
+                      pct >= 100 ? "bg-[#f87171]/08 border-[#f87171]/20 text-[#f87171]" :
+                      pct >= 80  ? "bg-[#e05000]/08 border-[#e05000]/20 text-[#e05000]" :
+                                   "bg-[#111] border-[#1e1e1e] text-[#666] hover:text-[#aaa]"
                     )}
                   >
                     <Euro className="w-3 h-3" />
@@ -617,37 +778,37 @@ export default function App() {
               {/* Save status + category count indicator */}
               <div
                 className={cn(
-                  "hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono border transition-colors",
+                  "hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono border transition-colors",
                   saveStatus === 'error'
-                    ? "bg-rose-500/10 border-rose-500/25"
-                    : "bg-gray-900 border-gray-800"
+                    ? "bg-[#f87171]/08 border-[#f87171]/20"
+                    : "bg-[#111] border-[#1e1e1e]"
                 )}
                 title={saveStatus === 'error' ? 'Server + IndexedDB both failed to save. Data is safe in localStorage but close the tab carefully.' : undefined}
               >
-                <Cloud className="w-3 h-3 text-gray-500" />
-                <span className="text-gray-400">{categories.length}</span>
-                {saveStatus === 'saving' && <Loader2 className="w-3 h-3 text-yellow-400 animate-spin" />}
-                {saveStatus === 'saved' && <CheckCircle2 className="w-3 h-3 text-emerald-400" />}
-                {saveStatus === 'error' && <AlertCircle className="w-3 h-3 text-rose-400" aria-label="Save error — localStorage is still safe" />}
+                <Cloud className="w-3 h-3 text-[#444]" />
+                <span className="text-[#666]">{categories.length}</span>
+                {saveStatus === 'saving' && <Loader2 className="w-3 h-3 text-[#d4ac0d] animate-spin" />}
+                {saveStatus === 'saved' && <CheckCircle2 className="w-3 h-3 text-[#4ade80]" />}
+                {saveStatus === 'error' && <AlertCircle className="w-3 h-3 text-[#f87171]" aria-label="Save error — localStorage is still safe" />}
               </div>
 
               <div className="relative">
               <button 
                 onClick={() => setShowWeightsMenu(!showWeightsMenu)}
-                className="flex items-center space-x-2 text-gray-400 hover:text-white bg-gray-900 hover:bg-gray-800 px-4 py-2 border border-gray-800 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 text-[#555] hover:text-[#aaa] bg-[#111] hover:bg-[#181818] px-3 py-1.5 border border-[#1e1e1e] rounded-md text-xs font-medium transition-colors"
               >
-                <Settings2 className="w-4 h-4" />
-                <span className="text-sm font-medium">Smart Weights</span>
+                <Settings2 className="w-3.5 h-3.5" />
+                <span>Weights</span>
               </button>
 
               {/* Weights Dropdown */}
               {showWeightsMenu && (
-                <div className="absolute right-0 mt-2 w-80 bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl p-6 z-50">
-                  <div className="flex justify-between items-center mb-4 pb-2 border-b border-gray-800">
-                    <h4 className="text-white font-bold">Calculation Weights</h4>
-                    <span className="text-xs text-gray-500">Live Recalc</span>
+                <div className="absolute right-0 mt-2 w-72 bg-[#111] border border-[#1e1e1e] rounded-xl shadow-2xl p-5 z-50">
+                  <div className="flex justify-between items-center mb-4 pb-2 border-b border-[#1e1e1e]">
+                    <h4 className="text-[#f0f0f0] font-semibold text-sm">Calculation Weights</h4>
+                    <span className="text-[10px] text-[#444] uppercase tracking-wider font-mono">Live Recalc</span>
                   </div>
-                  <div className="space-y-4">
+                  <div className="space-y-3.5">
                     <WeightSlider name="CLV" value={weights.clv} min={0} max={50} onChange={v => setWeights({...weights, clv: v})} />
                     <WeightSlider name="Retention (1-Churn)" value={weights.retention} min={0} max={50} onChange={v => setWeights({...weights, retention: v})} />
                     <WeightSlider name="Acquisition Ease" value={weights.acquisition} min={0} max={50} onChange={v => setWeights({...weights, acquisition: v})} />
@@ -656,8 +817,8 @@ export default function App() {
                     <WeightSlider name="Story Depth & Moat" value={weights.storyDepth} min={0} max={50} onChange={v => setWeights({...weights, storyDepth: v})} />
                     <WeightSlider name="Micro-niche Potential" value={weights.microNiche} min={0} max={50} onChange={v => setWeights({...weights, microNiche: v})} />
                   </div>
-                  <div className="mt-6 pt-4 border-t border-gray-800 text-center">
-                    <p className="text-xs text-gray-500">These parameters drive the "Overall Decision Score"</p>
+                  <div className="mt-4 pt-3 border-t border-[#1a1a1a] text-center">
+                    <p className="text-[11px] text-[#444]">These parameters drive the "Overall Decision Score"</p>
                   </div>
                 </div>
               )}
@@ -666,7 +827,7 @@ export default function App() {
           </header>
 
           {/* Scrollable Context */}
-          <main className={cn("flex-1 scroll-smooth relative", currentView === 'categories' ? 'overflow-hidden' : 'overflow-y-auto p-8')}>
+          <main className={cn("flex-1 scroll-smooth relative", currentView === 'categories' ? 'overflow-hidden' : 'overflow-y-auto p-6')}>
             {currentView === 'dashboard' && <DashboardView categories={categories} weights={ weights} maxClv={maxClv} />}
             {currentView === 'categories' && <CategoriesView categories={categories} weights={weights} maxClv={maxClv} onEdit={openEditor} onUpdateStatus={handleUpdateStatus} onDeepSearch={handleDeepSearch} onDeepSearchAllNew={handleDeepSearchAllNew} onRefreshResearched={handleRefreshResearched} onRefreshFailed={handleRefreshFailed} onStopBulkResearch={handleStopBulkResearch} isBulkResearching={isBulkResearching} bulkStats={bulkStats} />}
             {currentView === 'comparison' && <ComparisonView categories={categories} weights={weights} maxClv={maxClv} />}
@@ -685,6 +846,9 @@ export default function App() {
             {currentView === 'prompts' && <PromptsView />}
             {currentView === 'settings' && <SettingsView onRefreshSpending={() => setSpendingRefresh(v => v + 1)} />}
             {currentView === 'chatgpt' && <ChatGPTView categories={categories} weights={weights} maxClv={maxClv} onGoToSettings={() => setCurrentView('settings')} />}
+            {currentView === 'intel' && <IntelView notes={intelNotes} onAdd={handleAddNote} onDelete={handleDeleteNote} onEnrich={handleEnrichNote} />}
+            {currentView === 'brands' && <BrandTrackerView brands={trackedBrands} onAdd={handleAddBrand} onDelete={(id) => setTrackedBrands(prev => prev.filter(b => b.id !== id))} onRetry={handleRetryBrand} onAddToCategories={handleAddBrandToCategories} categories={categories} />}
+            {currentView === 'finance' && <FinanceView scenarios={financeScenarios} onAdd={handleAddScenario} onDelete={handleDeleteScenario} />}
             {currentView === 'edit' && (
               <EditCategoryView 
                 category={editingId ? categories.find(c => c.id === editingId) || null : null} 
@@ -715,18 +879,43 @@ export default function App() {
 
 // Subcomponents
 
-function NavItem({ icon, label, active, onClick }: { icon: React.ReactNode, label: string, active: boolean, onClick: () => void }) {
+function NavSection({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <button 
+    <div className="space-y-0.5">
+      <p className="px-2 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#333]">{label}</p>
+      {children}
+    </div>
+  );
+}
+
+function NavItem({
+  icon, label, active, onClick, badge,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  badge?: number;
+}) {
+  return (
+    <button
       onClick={onClick}
-      className={`w-full flex items-center px-4 py-3 rounded-xl transition-all duration-200 ${
-        active 
-          ? 'bg-orange-500/10 text-orange-400 font-semibold border border-orange-500/20' 
-          : 'text-gray-400 hover:text-gray-200 hover:bg-gray-900 border border-transparent'
-      }`}
+      className={cn(
+        "w-full flex items-center justify-between px-2.5 py-[6px] text-[13px] transition-colors duration-100 rounded-md group border-l-[2px]",
+        active
+          ? 'border-l-[#e05000] text-[#f0f0f0] bg-[#141414]'
+          : 'border-l-transparent text-[#5a5a5a] hover:text-[#b0b0b0] hover:bg-[#0f0f0f]'
+      )}
     >
-      {icon}
-      <span className="ml-3 text-sm">{label}</span>
+      <span className="flex items-center gap-2.5">
+        <span className={cn("transition-colors shrink-0", active ? "text-[#e05000]" : "text-[#3a3a3a] group-hover:text-[#666]")}>
+          {icon}
+        </span>
+        <span className="font-medium leading-none">{label}</span>
+      </span>
+      {badge !== undefined && (
+        <span className="text-[10px] font-mono bg-[#1a1a1a] text-[#484848] px-1.5 py-0.5 rounded">{badge}</span>
+      )}
     </button>
   );
 }
@@ -734,9 +923,9 @@ function NavItem({ icon, label, active, onClick }: { icon: React.ReactNode, labe
 function WeightSlider({ name, value, min, max, onChange }: { name: string, value: number, min: number, max: number, onChange: (v: number) => void }) {
   return (
     <div>
-      <div className="flex justify-between text-xs mb-1">
-        <span className="text-gray-400 uppercase tracking-wider">{name}</span>
-        <span className="text-orange-400 font-bold">{value}%</span>
+      <div className="flex justify-between text-xs mb-1.5">
+        <span className="text-[#555] uppercase tracking-[0.1em] text-[10px] font-medium">{name}</span>
+        <span className="text-[#e05000] font-mono text-[11px]">{value}%</span>
       </div>
       <input 
         type="range" 
@@ -744,10 +933,8 @@ function WeightSlider({ name, value, min, max, onChange }: { name: string, value
         max={max} 
         value={value} 
         onChange={e => onChange(parseInt(e.target.value))}
-        className="w-full accent-orange-500 h-1bg-gray-800 rounded-lg appearance-none cursor-pointer"
-        style={{
-          boxShadow: 'none'
-        }}
+        className="w-full accent-[#e05000] h-1 bg-[#1e1e1e] rounded-lg appearance-none cursor-pointer"
+        style={{ boxShadow: 'none' }}
       />
     </div>
   );

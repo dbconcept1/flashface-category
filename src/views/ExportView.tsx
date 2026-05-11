@@ -153,29 +153,29 @@ export function ExportView({ categories }: Props) {
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <div className="flex flex-col space-y-2">
-        <h2 className="text-3xl font-bold text-white capitalize tracking-tight flex items-center">
-          <DownloadCloud className="w-6 h-6 mr-3 text-orange-500" />
+        <h2 className="text-3xl font-bold text-[#f0f0f0] capitalize tracking-tight flex items-center">
+          <DownloadCloud className="w-6 h-6 mr-3 text-[#e05000]" />
           Export Data
         </h2>
-        <p className="text-gray-400">
+        <p className="text-[#666]">
           Export your categories for backups, analysis, or to brainstorm new ideas with AI.
         </p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Full AI Context Package — new primary card */}
-        <div className="bg-[#111111] border border-orange-500/20 rounded-2xl p-6 shadow-xl space-y-4">
-          <div className="w-12 h-12 bg-orange-500/10 rounded-xl flex items-center justify-center mb-4">
-            <Zap className="w-6 h-6 text-orange-400" />
+        <div className="bg-[#0d0d0d] border border-[#e05000]/15 rounded-xl p-6 shadow-xl space-y-4">
+          <div className="w-12 h-12 bg-[#e05000]/08 rounded-xl flex items-center justify-center mb-4">
+            <Zap className="w-6 h-6 text-[#e05000]" />
           </div>
-          <h3 className="text-lg font-bold text-gray-200">Full AI Context Package</h3>
-          <p className="text-sm text-gray-500">
+          <h3 className="text-lg font-bold text-[#d0d0d0]">Full AI Context Package</h3>
+          <p className="text-sm text-[#484848]">
             Rich structured markdown with every field — CLV, CAC, LTV:CAC, TAM→SOM funnels, all 9 agent research reports, scores — ready to paste into ChatGPT, Claude, or Gemini for deep analysis.
           </p>
           <div className="pt-4">
             <button
               onClick={handleCopyAiContext}
-              className="w-full flex items-center justify-center px-4 py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-medium transition-colors"
+              className="w-full flex items-center justify-center px-4 py-3 bg-[#e05000] hover:bg-[#e05000] text-[#f0f0f0] rounded-xl font-medium transition-colors"
             >
               {copiedType === 'aiContext' ? (
                 <><CheckCircle2 className="w-5 h-5 mr-2" /> Copied Full Context</>
@@ -184,22 +184,22 @@ export function ExportView({ categories }: Props) {
               )}
             </button>
           </div>
-          <p className="text-xs text-gray-600">Includes all agent reports untruncated. Use in ChatGPT → Export &amp; Analyse.</p>
+          <p className="text-xs text-[#3a3a3a]">Includes all agent reports untruncated. Use in ChatGPT → Export &amp; Analyse.</p>
         </div>
 
         {/* Export for AI Brainstorming */}
-        <div className="bg-[#111111] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4">
+        <div className="bg-[#0d0d0d] border border-[#1e1e1e] rounded-xl p-6 shadow-xl space-y-4">
           <div className="w-12 h-12 bg-indigo-500/10 rounded-xl flex items-center justify-center mb-4">
             <FileText className="w-6 h-6 text-indigo-400" />
           </div>
-          <h3 className="text-lg font-bold text-gray-200">Quick Brainstorm Prompt</h3>
-          <p className="text-sm text-gray-500">
+          <h3 className="text-lg font-bold text-[#d0d0d0]">Quick Brainstorm Prompt</h3>
+          <p className="text-sm text-[#484848]">
             Compact summary of all categories with key metrics — paste into any AI to ask for new niche ideas you haven't researched yet.
           </p>
           <div className="pt-4">
             <button
               onClick={handleCopyText}
-              className="w-full flex items-center justify-center px-4 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium transition-colors"
+              className="w-full flex items-center justify-center px-4 py-3 bg-indigo-600 hover:bg-indigo-500 text-[#f0f0f0] rounded-xl font-medium transition-colors"
             >
               {copiedType === 'text' ? (
                 <><CheckCircle2 className="w-5 h-5 mr-2" /> Copied Prompt</>
@@ -211,28 +211,28 @@ export function ExportView({ categories }: Props) {
         </div>
 
         {/* REST API card */}
-        <div className="bg-[#111111] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4">
-          <div className="w-12 h-12 bg-emerald-500/10 rounded-xl flex items-center justify-center mb-4">
-            <Globe className="w-6 h-6 text-emerald-400" />
+        <div className="bg-[#0d0d0d] border border-[#1e1e1e] rounded-xl p-6 shadow-xl space-y-4">
+          <div className="w-12 h-12 bg-[#4ade80]/08 rounded-xl flex items-center justify-center mb-4">
+            <Globe className="w-6 h-6 text-[#4ade80]" />
           </div>
-          <h3 className="text-lg font-bold text-gray-200">Live REST API</h3>
-          <p className="text-sm text-gray-500">
+          <h3 className="text-lg font-bold text-[#d0d0d0]">Live REST API</h3>
+          <p className="text-sm text-[#484848]">
             Your data is available as a live JSON endpoint — any external tool, script, Zapier/Make.com automation, or AI can pull the full category database at any time.
           </p>
-          <div className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 font-mono text-xs text-emerald-400 break-all">
+          <div className="bg-[#111] border border-[#1e1e1e] rounded-xl px-4 py-3 font-mono text-xs text-[#4ade80] break-all">
             GET {API_URL}
           </div>
-          <div className="space-y-1 text-xs text-gray-600">
+          <div className="space-y-1 text-xs text-[#3a3a3a]">
             <p>• GET returns all categories as structured JSON</p>
             <p>• POST replaces the full dataset (used internally for sync)</p>
             <p>• Runs only while the dev server is active</p>
           </div>
           <button
             onClick={() => { navigator.clipboard.writeText(API_URL); setCopiedType('api'); setTimeout(() => setCopiedType(null), 3000); }}
-            className="w-full flex items-center justify-center px-4 py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-medium transition-colors border border-gray-700 text-sm"
+            className="w-full flex items-center justify-center px-4 py-2.5 bg-[#1a1a1a] hover:bg-[#222] text-[#f0f0f0] rounded-xl font-medium transition-colors border border-[#252525] text-sm"
           >
             {copiedType === 'api' ? (
-              <><CheckCircle2 className="w-4 h-4 mr-2 text-emerald-400" /> URL Copied</>
+              <><CheckCircle2 className="w-4 h-4 mr-2 text-[#4ade80]" /> URL Copied</>
             ) : (
               <><Copy className="w-4 h-4 mr-2" /> Copy API URL</>
             )}
@@ -240,18 +240,18 @@ export function ExportView({ categories }: Props) {
         </div>
 
         {/* Export JSON */}
-        <div className="bg-[#111111] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4">
-          <div className="w-12 h-12 bg-orange-500/10 rounded-xl flex items-center justify-center mb-4">
-            <FileJson className="w-6 h-6 text-orange-400" />
+        <div className="bg-[#0d0d0d] border border-[#1e1e1e] rounded-xl p-6 shadow-xl space-y-4">
+          <div className="w-12 h-12 bg-[#e05000]/08 rounded-xl flex items-center justify-center mb-4">
+            <FileJson className="w-6 h-6 text-[#e05000]" />
           </div>
-          <h3 className="text-lg font-bold text-gray-200">Full JSON Backup</h3>
-          <p className="text-sm text-gray-500">
+          <h3 className="text-lg font-bold text-[#d0d0d0]">Full JSON Backup</h3>
+          <p className="text-sm text-[#484848]">
             Download a complete raw JSON file containing all your data, metrics, notes, and research. Ideal for backups or importing back later.
           </p>
           <div className="pt-4">
             <button
               onClick={handleExportJSON}
-              className="w-full flex items-center justify-center px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-medium transition-colors border border-gray-700"
+              className="w-full flex items-center justify-center px-4 py-3 bg-[#1a1a1a] hover:bg-[#222] text-[#f0f0f0] rounded-xl font-medium transition-colors border border-[#252525]"
             >
               {copiedType === 'json' ? (
                 <><CheckCircle2 className="w-5 h-5 mr-2" /> Downloaded</>
@@ -263,18 +263,18 @@ export function ExportView({ categories }: Props) {
         </div>
 
         {/* Export CSV */}
-        <div className="bg-[#111111] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4 md:col-span-2">
+        <div className="bg-[#0d0d0d] border border-[#1e1e1e] rounded-xl p-6 shadow-xl space-y-4 md:col-span-2">
           <div className="w-12 h-12 bg-green-500/10 rounded-xl flex items-center justify-center mb-4">
             <FileSpreadsheet className="w-6 h-6 text-green-400" />
           </div>
-          <h3 className="text-lg font-bold text-gray-200">Export as CSV</h3>
-          <p className="text-sm text-gray-500">
+          <h3 className="text-lg font-bold text-[#d0d0d0]">Export as CSV</h3>
+          <p className="text-sm text-[#484848]">
             Download a basic spreadsheet of your categories and unit economics. Useful for financial modeling or sharing with stakeholders.
           </p>
           <div className="pt-4 flex justify-end">
              <button
               onClick={handleExportCSV}
-              className="px-6 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-medium transition-colors border border-gray-700 flex items-center"
+              className="px-6 py-3 bg-[#1a1a1a] hover:bg-[#222] text-[#f0f0f0] rounded-xl font-medium transition-colors border border-[#252525] flex items-center"
             >
               {copiedType === 'csv' ? (
                 <><CheckCircle2 className="w-5 h-5 mr-2" /> Downloaded</>

@@ -194,28 +194,28 @@ Final verdict: GO / NO-GO / NEEDS MORE RESEARCH — and be honest about the weak
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <div className="flex flex-col space-y-2">
-        <h2 className="text-3xl font-bold text-white capitalize tracking-tight flex items-center">
-          <Terminal className="w-6 h-6 mr-3 text-orange-500" />
+        <h2 className="text-3xl font-bold text-[#f0f0f0] capitalize tracking-tight flex items-center">
+          <Terminal className="w-6 h-6 mr-3 text-[#e05000]" />
           AI Prompts Library
         </h2>
-        <p className="text-gray-400">
+        <p className="text-[#666]">
           Prompts engineered for your FlashFace workflow. Copy any prompt, add your data from the{' '}
-          <span className="text-orange-400 font-medium">ChatGPT</span> or{' '}
-          <span className="text-orange-400 font-medium">Export</span> views, and paste into any AI.
+          <span className="text-[#e05000] font-medium">ChatGPT</span> or{' '}
+          <span className="text-[#e05000] font-medium">Export</span> views, and paste into any AI.
         </p>
       </div>
 
       <div className="space-y-6">
         {prompts.map(prompt => (
-          <div key={prompt.id} className="bg-[#111111] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4">
+          <div key={prompt.id} className="bg-[#0d0d0d] border border-[#1e1e1e] rounded-xl p-6 shadow-xl space-y-4">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
-                <h3 className="text-xl font-bold text-gray-200">{prompt.title}</h3>
-                <p className="text-sm text-gray-400 mt-1">{prompt.description}</p>
+                <h3 className="text-xl font-bold text-[#d0d0d0]">{prompt.title}</h3>
+                <p className="text-sm text-[#666] mt-1">{prompt.description}</p>
               </div>
               <button
                 onClick={() => handleCopy(prompt.id, prompt.content)}
-                className="shrink-0 flex items-center px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg font-medium transition-colors border border-gray-700"
+                className="shrink-0 flex items-center px-4 py-2 bg-[#1a1a1a] hover:bg-[#222] text-[#f0f0f0] rounded-lg font-medium transition-colors border border-[#252525]"
               >
                 {copiedId === prompt.id ? (
                   <><CheckCircle2 className="w-4 h-4 mr-2 text-green-500" /> Copied</>
@@ -224,8 +224,8 @@ Final verdict: GO / NO-GO / NEEDS MORE RESEARCH — and be honest about the weak
                 )}
               </button>
             </div>
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 overflow-y-auto max-h-96">
-              <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono">
+            <div className="bg-[#111] border border-[#1e1e1e] rounded-xl p-4 overflow-y-auto max-h-96">
+              <pre className="text-xs text-[#aaa] whitespace-pre-wrap font-mono">
                 {prompt.content}
               </pre>
             </div>
