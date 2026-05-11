@@ -1,17 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Category, Weights } from '../types';
+import { Category, Weights, BrainEntry } from '../types';
 import { calculateDecisionScore, calculateLtvCac, getMacroSector, cn } from '../utils';
 import {
   MessageSquare, Send, Square, Plus, Settings2, Loader2,
-  User, Bot, ChevronDown, ChevronUp, Copy, CheckCircle2,
+  User, Bot, ChevronDown, ChevronUp, Copy, CheckCircle2, Brain,
 } from 'lucide-react';
 import { getOpenAiApiKey } from '../lib/settings';
+import { compileBrain, estimateBrainTokens } from '../lib/brainCompiler';
 
 interface Props {
   categories: Category[];
   weights: Weights;
   maxClv: number;
+  brainEntries?: BrainEntry[];
   onGoToSettings?: () => void;
+  onGoToBrain?: () => void;
 }
 
 interface Message {
@@ -390,7 +393,7 @@ function MessageBubble({ msg }: { msg: Message }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Props) {
+export function ChatGPTView({ categories, weights, maxClv, brainEntries = [], onGoToSettings, onGoToBrain }: Props) {
   const apiKey = getOpenAiApiKey();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -415,8 +418,10 @@ export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Pro
   useEffect(() => () => { abortRef.current?.abort(); }, []);
 
   const buildSystemContent = useCallback(() => {
-    return `${SYSTEM_PROMPT}\n\n---\n\n${buildSessionData(categories, weights, maxClv)}`;
-  }, [categories, weights, maxClv]);
+    const brain = compileBrain(brainEntries);
+    const brainSection = brain ? `\n\n${brain}\n\n---` : '';
+    return `${SYSTEM_PROMPT}${brainSection}\n\n---\n\n${buildSessionData(categories, weights, maxClv)}`;
+  }, [categories, weights, maxClv, brainEntries]);
 
   const sendMessage = useCallback(async (userText: string) => {
     const text = userText.trim();
@@ -583,7 +588,7 @@ export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Pro
 
       {/* Live chat header */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-[#141414] bg-[#080808]/80 shrink-0">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 flex-wrap">
           <div className="w-7 h-7 rounded-lg bg-blue-600/20 border border-blue-500/30 flex items-center justify-center">
             <MessageSquare className="w-3.5 h-3.5 text-blue-400" />
           </div>
@@ -591,6 +596,16 @@ export function ChatGPTView({ categories, weights, maxClv, onGoToSettings }: Pro
           <span className="text-[10px] font-mono px-2 py-0.5 rounded border text-[#4ade80] bg-[#4ade80]/08 border-[#4ade80]/15">
             {categories.filter(c => c.status !== 'Killed').length} categories in context
           </span>
+          {brainEntries.filter(e => e.priority !== 'archived').length > 0 && (
+            <button
+              onClick={onGoToBrain}
+              title="Brain entries injected into every message"
+              className="flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded border text-[#e05000] bg-[#e05000]/08 border-[#e05000]/15 hover:bg-[#e05000]/15 transition-colors"
+            >
+              <Brain className="w-3 h-3" />
+              {brainEntries.filter(e => e.priority !== 'archived').length} brain entries
+            </button>
+          )}
         </div>
         <button
           onClick={handleNewConversation}

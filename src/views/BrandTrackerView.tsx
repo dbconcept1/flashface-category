@@ -3,7 +3,7 @@ import { TrackedBrand, Category } from '../types';
 import {
   Bookmark, Plus, X, Loader2, AlertCircle, RefreshCw,
   ExternalLink, CheckCircle2, ArrowRight, ChevronDown, ChevronUp,
-  Tag, Zap,
+  Tag, Zap, CalendarClock, Megaphone,
 } from 'lucide-react';
 import { cn } from '../utils';
 import type { BrandInput } from '../services/brandService';
@@ -17,6 +17,8 @@ interface Props {
   onDelete: (id: string) => void;
   onRetry: (id: string) => void;
   onAddToCategories: (brand: TrackedBrand) => void;
+  /** Toggle weekly scheduled auto-research for a brand. */
+  onToggleSchedule: (id: string) => void;
   /** Existing categories — used to indicate if a category already exists. */
   categories: Category[];
 }
@@ -100,11 +102,12 @@ function ErrorCard({ brand, onRetry, onDelete }: { brand: TrackedBrand; onRetry:
 
 /** Complete brand intel card */
 function BrandCard({
-  brand, onDelete, onAddToCategories, isLinked,
+  brand, onDelete, onAddToCategories, onToggleSchedule, isLinked,
 }: {
   brand: TrackedBrand;
   onDelete: () => void;
   onAddToCategories: () => void;
+  onToggleSchedule: () => void;
   isLinked: boolean;
   categories?: Category[];
 }) {
@@ -231,7 +234,7 @@ function BrandCard({
           )}
 
           {/* Actions */}
-          <div className="flex gap-2 pt-3 border-t border-gray-800/60">
+          <div className="flex flex-wrap gap-2 pt-3 border-t border-gray-800/60">
             {brand.aiSummary && (
               <button
                 onClick={() => setShowFull(true)}
@@ -240,6 +243,28 @@ function BrandCard({
                 <Zap className="w-3 h-3" /> Full Intel
               </button>
             )}
+            {/* Meta Ads Library */}
+            <a
+              href={`https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&q=${encodeURIComponent(brand.metaAdsPageId ?? brand.name)}&search_type=keyword_unordered`}
+              target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-1.5 text-xs text-blue-400/70 hover:text-blue-400 border border-blue-500/15 hover:border-blue-500/30 px-3 py-1.5 rounded-lg transition-all"
+              title="Search Meta Ads Library"
+            >
+              <Megaphone className="w-3 h-3" /> Meta Ads
+            </a>
+            {/* Weekly schedule toggle */}
+            <button
+              onClick={onToggleSchedule}
+              title={brand.scheduledUpdate ? 'Weekly auto-research ON — click to disable' : 'Enable weekly auto-research'}
+              className={cn('flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all',
+                brand.scheduledUpdate
+                  ? 'bg-violet-500/10 text-violet-400 border-violet-500/25 hover:border-violet-500/40'
+                  : 'text-gray-600 border-gray-800 hover:text-gray-400 hover:border-gray-700'
+              )}
+            >
+              <CalendarClock className="w-3 h-3" />
+              {brand.scheduledUpdate ? 'Weekly ✓' : 'Schedule'}
+            </button>
             {isLinked ? (
               <span className="flex items-center gap-1.5 text-xs text-emerald-500 px-3 py-1.5">
                 <CheckCircle2 className="w-3 h-3" /> In Categories
@@ -253,6 +278,13 @@ function BrandCard({
               </button>
             )}
           </div>
+          {/* Last researched */}
+          {brand.lastResearched && (
+            <p className="text-[10px] text-gray-700 mt-2">
+              Last researched {new Date(brand.lastResearched).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+              {brand.latestDelta && <span className="text-violet-500/70"> · {brand.latestDelta}</span>}
+            </p>
+          )}
         </div>
       </div>
 
@@ -337,7 +369,7 @@ function BrandCard({
 
 // ─── Main view ────────────────────────────────────────────────────────────────
 
-export function BrandTrackerView({ brands, onAdd, onDelete, onRetry, onAddToCategories, categories }: Props) {
+export function BrandTrackerView({ brands, onAdd, onDelete, onRetry, onAddToCategories, onToggleSchedule, categories }: Props) {
   const [showModal, setShowModal]     = useState(false);
   const [filterStatus, setFilterStatus] = useState<'all' | TrackedBrand['status']>('all');
   const [form, setForm]               = useState({ name: '', url: '', description: '' });
@@ -456,6 +488,7 @@ export function BrandTrackerView({ brands, onAdd, onDelete, onRetry, onAddToCate
                 brand={brand}
                 onDelete={() => onDelete(brand.id)}
                 onAddToCategories={() => onAddToCategories(brand)}
+                onToggleSchedule={() => onToggleSchedule(brand.id)}
                 isLinked={linkedIds.has(brand.id)}
                 categories={categories}
               />

@@ -40,6 +40,7 @@ export interface AISchema {
   items?: AISchema;
   required?: string[];
   enum?: string[];
+  description?: string;
 }
 
 // ─── Request / Response ───────────────────────────────────────────────────────

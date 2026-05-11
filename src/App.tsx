@@ -10,24 +10,29 @@ import { ExportView } from './views/ExportView';
 import { PromptsView } from './views/PromptsView';
 import { DiscoveryView } from './views/DiscoveryView';
 import { cn } from './utils';
-import { Target, LayoutGrid, BarChart2, Plus, Settings2, FileText, DownloadCloud, Loader2, Terminal, Radar, Menu, CheckCircle2, AlertCircle, Cloud, Euro, MessageSquare, Brain, TrendingUp } from 'lucide-react';
+import { Target, LayoutGrid, BarChart2, Plus, Settings2, FileText, DownloadCloud, Loader2, Terminal, Radar, Menu, CheckCircle2, AlertCircle, Cloud, Euro, MessageSquare, Brain, TrendingUp, Headphones } from 'lucide-react';
 import { agenticDeepResearchCategory, discoverDtcCategories, createInitialProgress } from './services/aiService';
 import stringSimilarity from 'string-similarity';
 import { lsLoadCategories, saveAllLayers, loadBestCategories, flushGithubSave } from './lib/db';
 import { SettingsView } from './views/SettingsView';
 import { ChatGPTView } from './views/ChatGPTView';
 import { IntelView } from './views/IntelView';
+import { BrainView } from './views/BrainView';
 import { FinanceView } from './views/FinanceView';
 import { BrandTrackerView } from './views/BrandTrackerView';
-import type { IntelNote, FinanceScenario, TrackedBrand } from './types';
+import { CompanyProfilesView } from './views/CompanyProfilesView';
+import { IdeasView } from './views/IdeasView';
+import type { IntelNote, FinanceScenario, TrackedBrand, CompanyProfile, Idea, FounderPodcast, PodcastEpisode, BrainEntry } from './types';
 import { enrichNote } from './services/intelService';
 import { researchBrand } from './services/brandService';
 import type { BrandInput } from './services/brandService';
-import { Store } from 'lucide-react';
+import { Store, Building2, Lightbulb } from 'lucide-react';
+import { PodcastIntelView } from './views/PodcastIntelView';
+import { discoverFounderEpisodes, extractEpisodeInsights } from './services/podcastService';
 import { getSettings, calcBudgetPercent } from './lib/settings';
 import { useResearchSetter } from './lib/researchContext';
 
-type ViewMode = 'dashboard' | 'categories' | 'comparison' | 'edit' | 'import' | 'export' | 'prompts' | 'discovery' | 'settings' | 'chatgpt' | 'intel' | 'finance' | 'brands';
+type ViewMode = 'dashboard' | 'categories' | 'comparison' | 'edit' | 'import' | 'export' | 'prompts' | 'discovery' | 'settings' | 'chatgpt' | 'brain' | 'intel' | 'finance' | 'brands' | 'companies' | 'ideas' | 'podcasts';
 
 const VIEW_TITLES: Partial<Record<ViewMode, string>> = {
   dashboard: 'Overview',
@@ -39,9 +44,13 @@ const VIEW_TITLES: Partial<Record<ViewMode, string>> = {
   prompts: 'AI Prompts',
   chatgpt: 'AI Assistant',
   settings: 'Settings',
-  intel: 'Intel Brain',
+  brain: 'Brain OS',
+  intel: 'Intel Notes',
   finance: 'Financial Model',
   brands: 'Brand Tracker',
+  companies: 'Company Intelligence',
+  ideas: 'Ideas Board',
+  podcasts: 'Podcast Intel',
 };
 
 export default function App() {
@@ -74,6 +83,9 @@ export default function App() {
   const [isBulkResearching, setIsBulkResearching] = useState(false);
   const [spendingRefresh, setSpendingRefresh] = useState(0);
   const [bulkStats, setBulkStats] = useState<{ total: number; done: number; failed: number } | null>(null);
+  const [brainEntries, setBrainEntries] = useState<BrainEntry[]>(() => {
+    try { return JSON.parse(localStorage.getItem('flashface_brain') || '[]'); } catch { return []; }
+  });
   const [intelNotes, setIntelNotes] = useState<IntelNote[]>(() => {
     try { return JSON.parse(localStorage.getItem('flashface_intel_notes') || '[]'); } catch { return []; }
   });
@@ -83,11 +95,34 @@ export default function App() {
   const [trackedBrands, setTrackedBrands] = useState<TrackedBrand[]>(() => {
     try { return JSON.parse(localStorage.getItem('flashface_brands') || '[]'); } catch { return []; }
   });
+  const [companyProfiles, setCompanyProfiles] = useState<CompanyProfile[]>(() => {
+    try { return JSON.parse(localStorage.getItem('flashface_companies') || '[]'); } catch { return []; }
+  });
+  const [ideas, setIdeas] = useState<Idea[]>(() => {
+    try { return JSON.parse(localStorage.getItem('flashface_ideas') || '[]'); } catch { return []; }
+  });
+  const [founderPodcasts, setFounderPodcasts] = useState<FounderPodcast[]>(() => {
+    try { return JSON.parse(localStorage.getItem('flashface_podcasts') || '[]'); } catch { return []; }
+  });
+  const [podcastEpisodes, setPodcastEpisodes] = useState<PodcastEpisode[]>(() => {
+    try { return JSON.parse(localStorage.getItem('flashface_podcast_episodes') || '[]'); } catch { return []; }
+  });
+  const [scanningFounderId, setScanningFounderId] = useState<string | null>(null);
+  const [extractingEpisodeIds, setExtractingEpisodeIds] = useState<string[]>([]);
 
-  // Persist intel + finance + brands to localStorage
+  // Persist brain + intel + finance + brands + companies + ideas to localStorage
+  useEffect(() => { localStorage.setItem('flashface_brain', JSON.stringify(brainEntries)); }, [brainEntries]);
   useEffect(() => { localStorage.setItem('flashface_intel_notes', JSON.stringify(intelNotes)); }, [intelNotes]);
   useEffect(() => { localStorage.setItem('flashface_finance_scenarios', JSON.stringify(financeScenarios)); }, [financeScenarios]);
   useEffect(() => { localStorage.setItem('flashface_brands', JSON.stringify(trackedBrands)); }, [trackedBrands]);
+  useEffect(() => { localStorage.setItem('flashface_companies', JSON.stringify(companyProfiles)); }, [companyProfiles]);
+  useEffect(() => { localStorage.setItem('flashface_ideas', JSON.stringify(ideas)); }, [ideas]);
+  useEffect(() => { localStorage.setItem('flashface_podcasts', JSON.stringify(founderPodcasts)); }, [founderPodcasts]);
+  useEffect(() => { localStorage.setItem('flashface_podcast_episodes', JSON.stringify(podcastEpisodes)); }, [podcastEpisodes]);
+
+  const handleAddBrainEntry   = (e: BrainEntry) => setBrainEntries(prev => [e, ...prev]);
+  const handleUpdateBrainEntry = (e: BrainEntry) => setBrainEntries(prev => prev.map(x => x.id === e.id ? e : x));
+  const handleDeleteBrainEntry = (id: string)    => setBrainEntries(prev => prev.filter(x => x.id !== id));
 
   const handleAddNote = (note: IntelNote) => setIntelNotes(prev => [note, ...prev]);
   const handleDeleteNote = (id: string) => setIntelNotes(prev => prev.filter(n => n.id !== id));
@@ -116,7 +151,7 @@ export default function App() {
     const brand: TrackedBrand = { id, ...input, status: 'researching', createdAt: new Date().toISOString() };
     setTrackedBrands(prev => [brand, ...prev]);
     researchBrand(input).then(result => {
-      setTrackedBrands(prev => prev.map(b => b.id === id ? { ...b, ...result, status: 'complete' } : b));
+      setTrackedBrands(prev => prev.map(b => b.id === id ? { ...b, ...result, status: 'complete', lastResearched: new Date().toISOString() } : b));
     }).catch((e: any) => {
       setTrackedBrands(prev => prev.map(b => b.id === id ? { ...b, status: 'error', error: e?.message ?? 'Research failed' } : b));
     });
@@ -127,13 +162,19 @@ export default function App() {
     if (!brand) return;
     setTrackedBrands(prev => prev.map(b => b.id === id ? { ...b, status: 'researching', error: undefined } : b));
     researchBrand({ name: brand.name, url: brand.url, userDescription: brand.userDescription }).then(result => {
-      setTrackedBrands(prev => prev.map(b => b.id === id ? { ...b, ...result, status: 'complete' } : b));
+      setTrackedBrands(prev => prev.map(b => b.id === id ? { ...b, ...result, status: 'complete', lastResearched: new Date().toISOString() } : b));
     }).catch((e: any) => {
       setTrackedBrands(prev => prev.map(b => b.id === id ? { ...b, status: 'error', error: e?.message ?? 'Research failed' } : b));
     });
   };
 
-  const handleAddBrandToCategories = (brand: TrackedBrand) => {
+  const handleToggleBrandSchedule = (id: string) => {
+    setTrackedBrands(prev => prev.map(b =>
+      b.id === id ? { ...b, scheduledUpdate: !b.scheduledUpdate } : b
+    ));
+  };
+
+    const handleAddBrandToCategories = (brand: TrackedBrand) => {
     const catId = crypto.randomUUID();
     handleImport([{
       id: catId,
@@ -145,6 +186,77 @@ export default function App() {
       notes: `Brand Intel: ${brand.name}\n\n${brand.aiSummary || ''}`,
     }]);
     setTrackedBrands(prev => prev.map(b => b.id === brand.id ? { ...b, linkedCategoryId: catId } : b));
+  };
+
+  // ── Podcast Intel handlers ────────────────────────────────────────────────
+
+  const handleAddFounder = (data: { founderName: string; channelQuery: string; description?: string }) => {
+    setFounderPodcasts(prev => [...prev, { id: crypto.randomUUID(), ...data, createdAt: new Date().toISOString() }]);
+  };
+
+  const handleDeleteFounder = (id: string) => {
+    setFounderPodcasts(prev => prev.filter(f => f.id !== id));
+    setPodcastEpisodes(prev => prev.filter(e => e.founderId !== id));
+  };
+
+  const handleScanFounder = async (founder: FounderPodcast) => {
+    if (scanningFounderId) return;
+    setScanningFounderId(founder.id);
+    try {
+      const existingUrls = new Set(podcastEpisodes.filter(e => e.founderId === founder.id).map(e => e.youtubeUrl));
+      const found = await discoverFounderEpisodes(founder, existingUrls, () => {});
+      const newEpisodes: PodcastEpisode[] = found.map(ep => ({
+        ...ep,
+        id: crypto.randomUUID(),
+        processingStatus: 'pending' as const,
+        createdAt: new Date().toISOString(),
+      }));
+      if (newEpisodes.length > 0) {
+        setPodcastEpisodes(prev => [...newEpisodes, ...prev]);
+      }
+      setFounderPodcasts(prev => prev.map(f => f.id === founder.id ? { ...f, lastScanned: new Date().toISOString() } : f));
+    } catch (e: any) {
+      alert(`Scan failed: ${e.message}`);
+    } finally {
+      setScanningFounderId(null);
+    }
+  };
+
+  const handleExtractEpisode = async (episode: PodcastEpisode) => {
+    if (extractingEpisodeIds.includes(episode.id)) return;
+    setExtractingEpisodeIds(prev => [...prev, episode.id]);
+    setPodcastEpisodes(prev => prev.map(e => e.id === episode.id ? { ...e, processingStatus: 'processing' as const } : e));
+    try {
+      const result = await extractEpisodeInsights(episode, categories.map(c => c.name), () => {});
+      setPodcastEpisodes(prev => prev.map(e => e.id === episode.id ? { ...e, ...result, processingStatus: 'complete' as const } : e));
+    } catch (err: any) {
+      setPodcastEpisodes(prev => prev.map(e => e.id === episode.id ? { ...e, processingStatus: 'error' as const, errorMessage: err.message } : e));
+    } finally {
+      setExtractingEpisodeIds(prev => prev.filter(id => id !== episode.id));
+    }
+  };
+
+  const handleDeleteEpisode = (id: string) => {
+    setPodcastEpisodes(prev => prev.filter(e => e.id !== id));
+  };
+
+  const handleSendEpisodeToIntelBrain = (episode: PodcastEpisode) => {
+    const note: IntelNote = {
+      id: crypto.randomUUID(),
+      title: `${episode.founderName}: ${episode.title}`,
+      content: episode.fullReport || [
+        episode.summary || '',
+        episode.keyTactics?.length ? `## Key Tactics\n${episode.keyTactics.map(t => `- ${t}`).join('\n')}` : '',
+        episode.keyMetrics?.length ? `## Key Metrics\n${episode.keyMetrics.map(m => `- ${m}`).join('\n')}` : '',
+        episode.businessInsights?.length ? `## Business Insights\n${episode.businessInsights.map(b => `- ${b}`).join('\n')}` : '',
+      ].filter(Boolean).join('\n\n'),
+      source: 'Podcast',
+      tags: [episode.founderName, ...(episode.relevantCategories || [])].filter(Boolean),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    handleAddNote(note);
+    alert(`Saved to Intel Brain: "${note.title}"`);
   };
 
   const [isMainSidebarOpen, setIsMainSidebarOpen] = useState(true);
@@ -219,6 +331,31 @@ export default function App() {
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // On load: auto-research scheduled brands that haven't been updated in >7 days
+  useEffect(() => {
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const due = trackedBrands.filter(b =>
+      b.scheduledUpdate &&
+      b.status === 'complete' &&
+      (!b.lastResearched || now - new Date(b.lastResearched).getTime() > SEVEN_DAYS_MS)
+    );
+    if (!due.length) return;
+    due.forEach(brand => {
+      setTrackedBrands(prev => prev.map(b => b.id === brand.id ? { ...b, status: 'researching', error: undefined } : b));
+      researchBrand({ name: brand.name, url: brand.url, userDescription: brand.userDescription }).then(result => {
+        setTrackedBrands(prev => prev.map(b =>
+          b.id === brand.id ? { ...b, ...result, status: 'complete', lastResearched: new Date().toISOString() } : b
+        ));
+      }).catch((e: any) => {
+        setTrackedBrands(prev => prev.map(b =>
+          b.id === brand.id ? { ...b, status: 'error', error: e?.message ?? 'Scheduled research failed' } : b
+        ));
+      });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // One-off deduplication sweep on startup
@@ -606,7 +743,14 @@ export default function App() {
             <NavSection label="Intel Brain">
               <NavItem
                 icon={<Brain className="w-[15px] h-[15px]" />}
-                label="Knowledge Base"
+                label="Brain OS"
+                badge={brainEntries.filter(e => e.priority !== 'archived').length || undefined}
+                active={currentView === 'brain'}
+                onClick={() => setCurrentView('brain')}
+              />
+              <NavItem
+                icon={<FileText className="w-[15px] h-[15px]" />}
+                label="Intel Notes"
                 badge={intelNotes.length > 0 ? intelNotes.length : undefined}
                 active={currentView === 'intel'}
                 onClick={() => setCurrentView('intel')}
@@ -617,6 +761,27 @@ export default function App() {
                 badge={trackedBrands.length > 0 ? trackedBrands.length : undefined}
                 active={currentView === 'brands'}
                 onClick={() => setCurrentView('brands')}
+              />
+              <NavItem
+                icon={<Building2 className="w-[15px] h-[15px]" />}
+                label="Company Intelligence"
+                badge={companyProfiles.length > 0 ? companyProfiles.length : undefined}
+                active={currentView === 'companies'}
+                onClick={() => setCurrentView('companies')}
+              />
+              <NavItem
+                icon={<Lightbulb className="w-[15px] h-[15px]" />}
+                label="Ideas Board"
+                badge={ideas.filter(i => i.status !== 'killed').length || undefined}
+                active={currentView === 'ideas'}
+                onClick={() => setCurrentView('ideas')}
+              />
+              <NavItem
+                icon={<Headphones className="w-[15px] h-[15px]" />}
+                label="Podcast Intel"
+                badge={podcastEpisodes.filter(e => e.processingStatus === 'complete').length || undefined}
+                active={currentView === 'podcasts'}
+                onClick={() => setCurrentView('podcasts')}
               />
               <NavItem
                 icon={importState.tasks.some(t => t.status === 'extracting')
@@ -669,6 +834,11 @@ export default function App() {
                 <Plus className="w-4 h-4" />
                 New Category
               </button>
+            ) : currentView === 'brain' ? (
+              <div className="text-center py-1">
+                <p className="text-[10px] text-[#333] uppercase tracking-[0.1em] font-semibold">Brain OS</p>
+                <p className="text-xs text-[#3a3a3a] mt-0.5">{brainEntries.filter(e => e.priority !== 'archived').length} in context</p>
+              </div>
             ) : currentView === 'intel' ? (
               <div className="text-center py-1">
                 <p className="text-[10px] text-[#333] uppercase tracking-[0.1em] font-semibold">Intel Brain</p>
@@ -678,6 +848,21 @@ export default function App() {
               <div className="text-center py-1">
                 <p className="text-[10px] text-[#333] uppercase tracking-[0.1em] font-semibold">Brand Tracker</p>
                 <p className="text-xs text-[#3a3a3a] mt-0.5">{trackedBrands.length} brand{trackedBrands.length !== 1 ? 's' : ''}</p>
+              </div>
+            ) : currentView === 'companies' ? (
+              <div className="text-center py-1">
+                <p className="text-[10px] text-[#333] uppercase tracking-[0.1em] font-semibold">Company Intel</p>
+                <p className="text-xs text-[#3a3a3a] mt-0.5">{companyProfiles.length} profile{companyProfiles.length !== 1 ? 's' : ''}</p>
+              </div>
+            ) : currentView === 'ideas' ? (
+              <div className="text-center py-1">
+                <p className="text-[10px] text-[#333] uppercase tracking-[0.1em] font-semibold">Ideas</p>
+                <p className="text-xs text-[#3a3a3a] mt-0.5">{ideas.filter(i => i.status !== 'killed').length} active</p>
+              </div>
+            ) : currentView === 'podcasts' ? (
+              <div className="text-center py-1">
+                <p className="text-[10px] text-[#333] uppercase tracking-[0.1em] font-semibold">Podcast Intel</p>
+                <p className="text-xs text-[#3a3a3a] mt-0.5">{podcastEpisodes.filter(e => e.processingStatus === 'complete').length} extracted</p>
               </div>
             ) : currentView === 'finance' ? (
               <div className="text-center py-1">
@@ -845,9 +1030,26 @@ export default function App() {
             {currentView === 'export' && <ExportView categories={categories} />}
             {currentView === 'prompts' && <PromptsView />}
             {currentView === 'settings' && <SettingsView onRefreshSpending={() => setSpendingRefresh(v => v + 1)} />}
-            {currentView === 'chatgpt' && <ChatGPTView categories={categories} weights={weights} maxClv={maxClv} onGoToSettings={() => setCurrentView('settings')} />}
+            {currentView === 'chatgpt' && <ChatGPTView categories={categories} weights={weights} maxClv={maxClv} brainEntries={brainEntries} onGoToSettings={() => setCurrentView('settings')} onGoToBrain={() => setCurrentView('brain')} />}
+            {currentView === 'brain' && <BrainView entries={brainEntries} onAdd={handleAddBrainEntry} onUpdate={handleUpdateBrainEntry} onDelete={handleDeleteBrainEntry} />}
             {currentView === 'intel' && <IntelView notes={intelNotes} onAdd={handleAddNote} onDelete={handleDeleteNote} onEnrich={handleEnrichNote} />}
-            {currentView === 'brands' && <BrandTrackerView brands={trackedBrands} onAdd={handleAddBrand} onDelete={(id) => setTrackedBrands(prev => prev.filter(b => b.id !== id))} onRetry={handleRetryBrand} onAddToCategories={handleAddBrandToCategories} categories={categories} />}
+            {currentView === 'brands' && <BrandTrackerView brands={trackedBrands} onAdd={handleAddBrand} onDelete={(id) => setTrackedBrands(prev => prev.filter(b => b.id !== id))} onRetry={handleRetryBrand} onAddToCategories={handleAddBrandToCategories} onToggleSchedule={handleToggleBrandSchedule} categories={categories} />}
+            {currentView === 'companies' && <CompanyProfilesView profiles={companyProfiles} onChange={setCompanyProfiles} />}
+            {currentView === 'ideas' && <IdeasView ideas={ideas} onAdd={(idea) => setIdeas(prev => [idea, ...prev])} onUpdate={(idea) => setIdeas(prev => prev.map(i => i.id === idea.id ? idea : i))} onDelete={(id) => setIdeas(prev => prev.filter(i => i.id !== id))} />}
+            {currentView === 'podcasts' && (
+              <PodcastIntelView
+                founders={founderPodcasts}
+                episodes={podcastEpisodes}
+                scanningFounderId={scanningFounderId}
+                extractingEpisodeIds={extractingEpisodeIds}
+                onAddFounder={handleAddFounder}
+                onDeleteFounder={handleDeleteFounder}
+                onScanFounder={handleScanFounder}
+                onExtractEpisode={handleExtractEpisode}
+                onDeleteEpisode={handleDeleteEpisode}
+                onSendToIntelBrain={handleSendEpisodeToIntelBrain}
+              />
+            )}
             {currentView === 'finance' && <FinanceView scenarios={financeScenarios} onAdd={handleAddScenario} onDelete={handleDeleteScenario} />}
             {currentView === 'edit' && (
               <EditCategoryView 

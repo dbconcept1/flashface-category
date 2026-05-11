@@ -1,0 +1,286 @@
+import { GoogleGenAI, Type } from "@google/genai";
+import type { FounderPodcast, PodcastEpisode } from "../types";
+import { getApiKey, checkBudget, recordApiUsage } from "../lib/settings";
+
+async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (e: any) {
+      lastError = e;
+      const isRetryable =
+        e?.message?.includes('429') ||
+        e?.message?.includes('503') ||
+        e?.message?.includes('RESOURCE_EXHAUSTED') ||
+        e?.message?.includes('overloaded') ||
+        e?.status === 429 ||
+        e?.status === 503;
+      if (!isRetryable || attempt === maxRetries) throw e;
+      const backoff = Math.min(Math.pow(2, attempt) * 2000 + Math.random() * 1000, 30000);
+      await new Promise(r => setTimeout(r, backoff));
+    }
+  }
+  throw lastError;
+}
+
+type DiscoveredEpisode = Pick<PodcastEpisode,
+  'founderId' | 'founderName' | 'title' | 'youtubeUrl' | 'publishDate' | 'sources'
+>;
+
+/**
+ * Scans YouTube for the latest podcast episodes from a founder.
+ * Uses Google Search grounding to find real youtube.com/watch?v= URLs.
+ */
+export async function discoverFounderEpisodes(
+  founder: FounderPodcast,
+  existingUrls: Set<string>,
+  onStatus: (msg: string) => void
+): Promise<DiscoveredEpisode[]> {
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("No Gemini API key configured. Add your key in Settings.");
+  checkBudget();
+
+  const ai = new GoogleGenAI({ apiKey });
+  const modelName = "gemini-2.5-flash";
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const safeGenerate = async (params: any) => {
+    checkBudget();
+    const response = await retryWithBackoff(() => ai.models.generateContent(params));
+    const meta = (response as any).usageMetadata;
+    const hasGrounding = Array.isArray(params.config?.tools) && params.config.tools.some((t: any) => 'googleSearch' in t);
+    recordApiUsage(meta?.promptTokenCount ?? 0, meta?.candidatesTokenCount ?? 0, hasGrounding ? 1 : 0);
+    return response;
+  };
+
+  const episodeSchema = {
+    type: Type.OBJECT,
+    properties: {
+      episodes: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            title:       { type: Type.STRING, description: "Exact video title as shown on YouTube" },
+            youtubeUrl:  { type: Type.STRING, description: "Full https://www.youtube.com/watch?v=VIDEO_ID URL" },
+            publishDate: { type: Type.STRING, description: "Approximate publish date: YYYY-MM-DD or 'Month YYYY'" },
+          },
+          required: ["title", "youtubeUrl"]
+        }
+      }
+    },
+    required: ["episodes"]
+  };
+
+  onStatus(`Searching YouTube for latest episodes from ${founder.founderName}...`);
+
+  const response = await safeGenerate({
+    model: modelName,
+    contents: `Find the 6 most recent YouTube podcast episodes featuring or hosted by: "${founder.founderName}".
+Channel/search hint: ${founder.channelQuery}
+
+MANDATORY SEARCHES — run all of these:
+1. site:youtube.com "${founder.founderName}" podcast 2025 2026
+2. "${founder.founderName}" "${founder.channelQuery}" youtube latest episode
+3. youtube.com "${founder.founderName}" interview DTC ecommerce subscription
+4. "${founder.founderName}" podcast episode youtube 2024 2025
+
+RETURN RULES:
+- Only include videos where this specific person appears (guest or host)
+- Return full youtube.com/watch?v=... URLs ONLY — no shorts, no playlists
+- ANTI-HALLUCINATION: only include URLs you actually retrieved from search. Never construct or guess video IDs.
+- Sort by newest first`,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: episodeSchema,
+      tools: [{ googleSearch: {} }],
+      toolConfig: { includeServerSideToolInvocations: true }
+    }
+  });
+
+  const data = JSON.parse(response.text?.trim() || '{}');
+  const results: DiscoveredEpisode[] = [];
+
+  for (const ep of (data.episodes || [])) {
+    if (!ep.youtubeUrl || !ep.title) continue;
+    // Normalize: must be a standard watch URL
+    const url: string = ep.youtubeUrl;
+    if (!url.includes('youtube.com/watch?v=') && !url.includes('youtu.be/')) continue;
+    // Expand short URLs
+    const normalizedUrl = url.includes('youtu.be/')
+      ? `https://www.youtube.com/watch?v=${url.split('youtu.be/')[1]?.split('?')[0]}`
+      : url.split('&')[0]; // strip playlist params
+    if (existingUrls.has(normalizedUrl)) continue;
+
+    results.push({
+      founderId: founder.id,
+      founderName: founder.founderName,
+      title: ep.title,
+      youtubeUrl: normalizedUrl,
+      publishDate: ep.publishDate,
+      sources: [normalizedUrl],
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Extracts DTC business intelligence from a YouTube episode.
+ *
+ * PRIMARY path: Gemini's native YouTube video understanding — pass the URL as
+ * fileData and Gemini watches/transcribes the video directly. No 3rd party
+ * transcription service needed.
+ *
+ * FALLBACK: If video processing fails (private video, unavailable, quota) —
+ * fall back to Google Search to find transcript snippets, show notes, and
+ * summaries, then extract from that.
+ */
+export async function extractEpisodeInsights(
+  episode: PodcastEpisode,
+  categoryNames: string[],
+  onStatus: (msg: string) => void
+): Promise<Partial<PodcastEpisode>> {
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("No Gemini API key configured. Add your key in Settings.");
+  checkBudget();
+
+  const ai = new GoogleGenAI({ apiKey });
+  const modelName = "gemini-2.5-flash";
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const safeGenerate = async (params: any) => {
+    checkBudget();
+    const response = await retryWithBackoff(() => ai.models.generateContent(params));
+    const meta = (response as any).usageMetadata;
+    const hasGrounding = Array.isArray(params.config?.tools) && params.config.tools.some((t: any) => 'googleSearch' in t);
+    recordApiUsage(meta?.promptTokenCount ?? 0, meta?.candidatesTokenCount ?? 0, hasGrounding ? 1 : 0);
+    return response;
+  };
+
+  const insightSchema = {
+    type: Type.OBJECT,
+    properties: {
+      summary: {
+        type: Type.STRING,
+        description: "2-3 sentence overview of the episode's core DTC business topic"
+      },
+      keyTactics: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: "Specific actionable tactics mentioned. Each item is 1 sentence."
+      },
+      keyMetrics: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: "Every number, KPI, or benchmark mentioned: LTV, CAC, churn %, revenue, ROAS, growth rates, conversion rates. Format: 'Metric: value (context)'"
+      },
+      businessInsights: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: "Strategic principles, mental models, and broader business insights. Each item is 1 sentence."
+      },
+      relevantCategories: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: `From this exact list, which categories does this episode have relevant insights for? Only pick categories that are actually discussed: ${categoryNames.slice(0, 40).join(', ')}`
+      },
+      fullReport: {
+        type: Type.STRING,
+        description: "Full structured markdown report, 400-800 words. Use ## headers for sections. Include direct quotes where possible."
+      }
+    },
+    required: ["summary", "keyTactics", "keyMetrics", "businessInsights", "fullReport"]
+  };
+
+  const extractionPrompt = `You are a DTC subscription business intelligence analyst. Extract maximum actionable value from this podcast for a DTC brand builder.
+
+Podcast: "${episode.title}" by ${episode.founderName}
+
+EXTRACT:
+1. Every specific TACTIC mentioned (growth hacks, retention plays, acquisition strategies, product decisions)
+2. Every NUMBER mentioned (LTV, CAC, churn, MRR, ARR, ROAS, conversion rates, audience sizes, growth percentages) — be precise, include context
+3. Core BUSINESS PRINCIPLES and mental models
+4. SUBSCRIPTION-SPECIFIC insights (pricing, packaging, trial offers, cancellation flows, win-backs)
+5. NETHERLANDS / EUROPE specific insights if mentioned
+6. Which product categories from our portfolio this knowledge applies to
+
+Be specific. Capture exact quotes where impactful. This goes into a permanent business intelligence database.`;
+
+  onStatus(`Processing: "${episode.title.slice(0, 60)}${episode.title.length > 60 ? '...' : ''}"`);
+
+  // ── Primary: Gemini native YouTube video processing ───────────────────────
+  // Gemini 2.5 Flash can watch YouTube videos directly via fileData URI.
+  // This gives access to the full audio transcript without any 3rd party service.
+  try {
+    const response = await safeGenerate({
+      model: modelName,
+      contents: [
+        { fileData: { mimeType: "video/*", fileUri: episode.youtubeUrl } },
+        extractionPrompt
+      ],
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: insightSchema,
+      }
+    });
+
+    const data = JSON.parse(response.text?.trim() || '{}');
+    onStatus('Extraction complete.');
+    return {
+      summary: data.summary || '',
+      keyTactics: data.keyTactics || [],
+      keyMetrics: data.keyMetrics || [],
+      businessInsights: data.businessInsights || [],
+      relevantCategories: (data.relevantCategories || []).filter((c: string) => categoryNames.includes(c)),
+      fullReport: data.fullReport || '',
+      sources: [episode.youtubeUrl],
+      extractedAt: new Date().toISOString(),
+    };
+  } catch (videoErr: any) {
+    // ── Fallback: search-based extraction ────────────────────────────────────
+    // Video unavailable, private, or quota exceeded → use Google Search to find
+    // show notes, transcript snippets, published summaries, and extract from those.
+    onStatus(`Direct video processing unavailable. Using search-based fallback...`);
+
+    const fallbackResponse = await safeGenerate({
+      model: modelName,
+      contents: `Find and analyze this DTC podcast episode. Extract business intelligence.
+
+Episode: "${episode.title}" by ${episode.founderName}
+YouTube: ${episode.youtubeUrl}
+
+SEARCHES TO RUN:
+1. "${episode.founderName}" "${episode.title}" transcript OR "show notes"
+2. "${episode.founderName}" "${episode.title.slice(0, 40)}" key takeaways
+3. site:youtube.com "${episode.youtubeUrl}" description transcript
+4. "${episode.founderName}" podcast business tactics ecommerce DTC
+
+${extractionPrompt}
+
+Note: "Video processed via search fallback — ${videoErr.message?.slice(0, 80)}"`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: insightSchema,
+        tools: [{ googleSearch: {} }],
+        toolConfig: { includeServerSideToolInvocations: true }
+      }
+    });
+
+    const data = JSON.parse(fallbackResponse.text?.trim() || '{}');
+    onStatus('Extraction complete (search fallback).');
+    return {
+      summary: data.summary || '',
+      keyTactics: data.keyTactics || [],
+      keyMetrics: data.keyMetrics || [],
+      businessInsights: data.businessInsights || [],
+      relevantCategories: (data.relevantCategories || []).filter((c: string) => categoryNames.includes(c)),
+      fullReport: data.fullReport
+        ? `> ⚠️ Extracted via search fallback (direct video unavailable: ${videoErr.message?.slice(0, 60)})\n\n${data.fullReport}`
+        : '',
+      sources: [episode.youtubeUrl],
+      extractedAt: new Date().toISOString(),
+    };
+  }
+}
