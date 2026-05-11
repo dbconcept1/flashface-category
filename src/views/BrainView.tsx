@@ -18,7 +18,7 @@ import {
   Brain, Plus, Search, X, Trash2, ChevronDown, ChevronUp,
   Zap, Quote, Star, User, Lightbulb, Shield, GitMerge, FileText,
   Upload, Sparkles, Loader2, CheckCircle2, AlertCircle, Info,
-  Copy, Check,
+  Copy, Check, ExternalLink,
 } from 'lucide-react';
 import { cn } from '../utils';
 import { compileBrain, estimateBrainTokens } from '../lib/brainCompiler';
@@ -127,6 +127,51 @@ Return ONLY valid JSON with these exact keys:
     tags:        Array.isArray(parsed.tags) ? parsed.tags : [],
     priority:    'core',
   };
+}
+
+// ─── Gemini Search enrichment ─────────────────────────────────────────────────
+
+/**
+ * Runs a Gemini Search grounding query for the given entry's title + content.
+ * Returns the top source URLs found during grounding.
+ *
+ * The grounding metadata is at:
+ *   response.candidates[0].groundingMetadata.groundingChunks[].web.uri
+ */
+async function enrichBrainEntryWithSearch(
+  entry: BrainEntry,
+): Promise<{ sources: string[]; summary: string }> {
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error('Gemini API key not configured in Settings.');
+
+  const ai = new GoogleGenAI({ apiKey });
+  const prompt = `Research and verify the following knowledge claim. Find real sources that either confirm or challenge it.
+
+Knowledge title: "${entry.title}"
+Content: "${entry.content}"
+${entry.source ? `Claimed source: "${entry.source}"` : ''}
+
+Provide a concise 2-3 sentence assessment: is this verifiable? What is the consensus? Then cite specific sources found.`;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const response = await (ai.models as any).generateContent({
+    model: 'gemini-2.5-flash',
+    contents: prompt,
+    config: { tools: [{ googleSearch: {} }] },
+  });
+
+  // Extract grounding source URLs from the response metadata
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const chunks = (response as any).candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const urls: string[] = chunks
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((c: any) => c?.web?.uri as string | undefined)
+    .filter((u: string | undefined): u is string => typeof u === 'string' && u.startsWith('http'))
+    .slice(0, 5);
+
+  const summary = (response.text?.trim() || '').slice(0, 400);
+  return { sources: urls, summary };
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -514,18 +559,68 @@ function EntryForm({ initial, onSave, onCancel, isEditing }: EntryFormProps) {
 // ─── Detail panel ─────────────────────────────────────────────────────────────
 
 function EntryDetail({
-  entry, onEdit, onClose, onDelete,
+  entry, onEdit, onClose, onDelete, onUpdate,
 }: {
   entry: BrainEntry;
   onEdit: () => void;
   onClose: () => void;
   onDelete: () => void;
+  onUpdate?: (updated: BrainEntry) => void;
 }) {
+  const [isEnriching, setIsEnriching] = useState(false);
+  const [enrichError, setEnrichError] = useState<string | null>(null);
+  const [enrichSummary, setEnrichSummary] = useState<string | null>(null);
+
+  const handleEnrich = async () => {
+    setIsEnriching(true);
+    setEnrichError(null);
+    setEnrichSummary(null);
+    try {
+      const { sources, summary } = await enrichBrainEntryWithSearch(entry);
+      setEnrichSummary(summary);
+      if (onUpdate) {
+        onUpdate({
+          ...entry,
+          confidence: 'verified',
+          verifiedSources: sources.length > 0 ? sources : entry.verifiedSources,
+          verifiedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    } catch (e: unknown) {
+      setEnrichError(e instanceof Error ? e.message : 'Enrichment failed');
+    } finally {
+      setIsEnriching(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-5 py-4 border-b border-[#1a1a1a] shrink-0">
         <TypeBadge type={entry.type} />
         <div className="flex items-center gap-2">
+          {onUpdate && (
+            <button
+              onClick={handleEnrich}
+              disabled={isEnriching}
+              title="Verify this entry with Gemini Search — fetches real sources and upgrades confidence to Verified"
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs border rounded-lg transition-colors',
+                isEnriching
+                  ? 'bg-emerald-500/08 border-emerald-500/20 text-emerald-500 cursor-wait'
+                  : entry.confidence === 'verified'
+                    ? 'bg-emerald-500/08 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/15'
+                    : 'bg-[#111] hover:bg-[#1a1a1a] border-[#1e1e1e] text-[#666] hover:text-emerald-400 hover:border-emerald-500/25',
+              )}
+            >
+              {isEnriching
+                ? <><Loader2 className="w-3 h-3 animate-spin" />Verifying…</>
+                : entry.confidence === 'verified'
+                  ? <><CheckCircle2 className="w-3 h-3" />Re-verify</>
+                  : <><Sparkles className="w-3 h-3" />Verify with Search</>
+              }
+            </button>
+          )}
           <button onClick={onEdit} className="px-3 py-1.5 text-xs bg-[#111] hover:bg-[#1a1a1a] border border-[#1e1e1e] text-[#666] hover:text-[#aaa] rounded-lg transition-colors">Edit</button>
           <button onClick={onDelete} className="px-3 py-1.5 text-xs bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-400 rounded-lg transition-colors">Delete</button>
           <button onClick={onClose} className="p-1.5 text-[#333] hover:text-[#aaa] transition-colors"><X className="w-4 h-4" /></button>
@@ -538,7 +633,30 @@ function EntryDetail({
           <span className="text-[10px] text-[#333]">
             Added {new Date(entry.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
           </span>
+          {entry.verifiedAt && (
+            <span className="text-[10px] text-emerald-700">
+              · Verified {new Date(entry.verifiedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+            </span>
+          )}
         </div>
+
+        {/* Enrich summary */}
+        {enrichSummary && (
+          <div className="bg-emerald-500/06 border border-emerald-500/20 rounded-xl p-3">
+            <p className="text-[10px] text-emerald-500 font-bold uppercase tracking-wider mb-1.5 flex items-center gap-1">
+              <CheckCircle2 className="w-3 h-3" /> Search Verification Result
+            </p>
+            <p className="text-xs text-[#888] leading-relaxed">{enrichSummary}</p>
+          </div>
+        )}
+        {enrichError && (
+          <div className="bg-rose-500/06 border border-rose-500/20 rounded-xl p-3">
+            <p className="text-xs text-rose-400 flex items-center gap-1.5">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />{enrichError}
+            </p>
+          </div>
+        )}
+
         <h2 className="text-xl font-bold text-[#f0f0f0] leading-tight">{entry.title}</h2>
 
         <div>
@@ -559,6 +677,29 @@ function EntryDetail({
           <div>
             <p className="text-[10px] text-[#484848] font-bold uppercase tracking-wider mb-1">Source</p>
             <p className="text-xs text-[#666]">{entry.source}</p>
+          </div>
+        )}
+
+        {/* Verified sources from Gemini Search */}
+        {entry.verifiedSources && entry.verifiedSources.length > 0 && (
+          <div>
+            <p className="text-[10px] text-emerald-700 font-bold uppercase tracking-wider mb-2 flex items-center gap-1">
+              <CheckCircle2 className="w-3 h-3" /> Verified Sources ({entry.verifiedSources.length})
+            </p>
+            <div className="space-y-1.5">
+              {entry.verifiedSources.map((url, i) => (
+                <a
+                  key={i}
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 text-xs text-[#555] hover:text-[#888] transition-colors truncate"
+                >
+                  <ExternalLink className="w-3 h-3 shrink-0 text-emerald-700" />
+                  <span className="truncate">{url.replace(/^https?:\/\//, '')}</span>
+                </a>
+              ))}
+            </div>
           </div>
         )}
 
@@ -943,6 +1084,7 @@ export function BrainView({ entries, onAdd, onUpdate, onDelete, prefillContent, 
                   onEdit={() => openEdit(expandedEntry)}
                   onClose={() => setExpandedId(null)}
                   onDelete={() => { onDelete(expandedEntry.id); setExpandedId(null); }}
+                  onUpdate={onUpdate}
                 />
               ) : null}
             </div>

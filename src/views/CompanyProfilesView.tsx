@@ -67,7 +67,7 @@ function compressImage(dataUrl: string, maxWidth = 1200): Promise<string> {
 
 interface Props {
   profiles: CompanyProfile[];
-  onChange: (profiles: CompanyProfile[]) => void;
+  onChange: React.Dispatch<React.SetStateAction<CompanyProfile[]>>;
 }
 
 // ─── Entry type badge ─────────────────────────────────────────────────────────
@@ -238,7 +238,7 @@ function ProfileDetail({
 }: {
   profile: CompanyProfile;
   onBack: () => void;
-  onUpdate: (updated: CompanyProfile) => void;
+  onUpdate: (updater: (current: CompanyProfile) => CompanyProfile) => void;
   onDelete: () => void;
 }) {
   const [text, setText]             = useState('');
@@ -281,7 +281,13 @@ function ProfileDetail({
   }, [handlePaste]);
 
   const saveEdit = () => {
-    onUpdate({ ...profile, name: nameVal.trim() || profile.name, url: urlVal.trim() || undefined, industry: industryVal.trim() || undefined, updatedAt: new Date().toISOString() });
+    onUpdate(current => ({
+      ...current,
+      name: nameVal.trim() || current.name,
+      url: urlVal.trim() || undefined,
+      industry: industryVal.trim() || undefined,
+      updatedAt: new Date().toISOString(),
+    }));
     setEditName(false);
   };
 
@@ -296,19 +302,22 @@ function ProfileDetail({
       source: source.trim() || undefined,
       addedAt: new Date().toISOString(),
     };
-    const updated: CompanyProfile = {
-      ...profile,
-      entries: [entry, ...profile.entries],
+    onUpdate(current => ({
+      ...current,
+      entries: [entry, ...current.entries],
       updatedAt: new Date().toISOString(),
-    };
-    onUpdate(updated);
+    }));
     setText(''); setSource(''); setPendingImage(null); setImageCaption('');
     setEntryType('note');
     textareaRef.current?.focus();
   };
 
   const deleteEntry = (id: string) => {
-    onUpdate({ ...profile, entries: profile.entries.filter(e => e.id !== id), updatedAt: new Date().toISOString() });
+    onUpdate(current => ({
+      ...current,
+      entries: current.entries.filter(e => e.id !== id),
+      updatedAt: new Date().toISOString(),
+    }));
   };
 
   const refreshBrief = async () => {
@@ -316,7 +325,12 @@ function ProfileDetail({
     setBriefError(null);
     try {
       const brief = await generateCompanyBrief(profile);
-      onUpdate({ ...profile, aiMasterBrief: brief, briefUpdatedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      onUpdate(current => ({
+        ...current,
+        aiMasterBrief: brief,
+        briefUpdatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }));
       setActiveTab('brief');
     } catch (e: any) {
       setBriefError(e?.message ?? 'Brief generation failed');
@@ -330,7 +344,12 @@ function ProfileDetail({
     setScanError(null);
     try {
       const scan = await scanCompanyReputation(profile.name, profile.url);
-      onUpdate({ ...profile, reviewScan: scan, lastScanned: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      onUpdate(current => ({
+        ...current,
+        reviewScan: scan,
+        lastScanned: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }));
       setActiveTab('reputation');
     } catch (e: any) {
       setScanError(e?.message ?? 'Scan failed');
@@ -340,7 +359,7 @@ function ProfileDetail({
   };
 
   const toggleSchedule = () => {
-    onUpdate({ ...profile, scheduledScan: !profile.scheduledScan, updatedAt: new Date().toISOString() });
+    onUpdate(current => ({ ...current, scheduledScan: !current.scheduledScan, updatedAt: new Date().toISOString() }));
   };
 
   const sortedEntries = useMemo(() =>
@@ -763,14 +782,14 @@ export function CompanyProfilesView({ profiles, onChange }: Props) {
 
   const activeProfile = profiles.find(p => p.id === activeId) ?? null;
 
-  const updateProfile = useCallback((updated: CompanyProfile) => {
-    onChange(profiles.map(p => p.id === updated.id ? updated : p));
-  }, [profiles, onChange]);
+  const updateProfile = useCallback((profileId: string, updater: (current: CompanyProfile) => CompanyProfile) => {
+    onChange(prev => prev.map(p => p.id === profileId ? updater(p) : p));
+  }, [onChange]);
 
   const deleteProfile = useCallback((id: string) => {
-    onChange(profiles.filter(p => p.id !== id));
+    onChange(prev => prev.filter(p => p.id !== id));
     setActiveId(null);
-  }, [profiles, onChange]);
+  }, [onChange]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return profiles;
@@ -792,7 +811,7 @@ export function CompanyProfilesView({ profiles, onChange }: Props) {
       <ProfileDetail
         profile={activeProfile}
         onBack={() => setActiveId(null)}
-        onUpdate={updateProfile}
+        onUpdate={(updater) => updateProfile(activeProfile.id, updater)}
         onDelete={() => deleteProfile(activeProfile.id)}
       />
     );
@@ -856,7 +875,7 @@ export function CompanyProfilesView({ profiles, onChange }: Props) {
 
       {showAdd && (
         <AddCompanyModal
-          onAdd={p => { onChange([p, ...profiles]); setActiveId(p.id); }}
+          onAdd={p => { onChange(prev => [p, ...prev]); setActiveId(p.id); }}
           onClose={() => setShowAdd(false)}
         />
       )}

@@ -6,11 +6,11 @@
  * to auto-fill career summaries keyed to LinkedIn, press, and public data.
  */
 
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import type { FounderProfile, CompanyProfile } from '../types';
 import {
   UserCircle2, Plus, X, ExternalLink, Loader2, Sparkles,
-  Search, Edit3, Trash2, ChevronLeft, AlertCircle, Link2,
+  Search, Edit3, Trash2, AlertCircle, Link2,
 } from 'lucide-react';
 import { cn } from '../utils';
 import { researchFounder } from '../services/reputationService';
@@ -138,7 +138,7 @@ function FounderModal({
 }: {
   founder: FounderProfile;
   companies: CompanyProfile[];
-  onUpdate: (f: FounderProfile) => void;
+  onUpdate: (updater: (current: FounderProfile) => FounderProfile) => void;
   onDelete: () => void;
   onClose: () => void;
 }) {
@@ -151,7 +151,12 @@ function FounderModal({
   const [notes, setNotes]       = useState(founder.notes);
   const [isResearching, setIsResearching] = useState(false);
   const [researchError, setResearchError] = useState<string | null>(null);
-  const notesSavedRef = useRef(false);
+  const lastSavedNotesRef = useRef(founder.notes);
+
+  useEffect(() => {
+    lastSavedNotesRef.current = founder.notes;
+    setNotes(founder.notes);
+  }, [founder.id, founder.notes]);
 
   const linkedCompanies = useMemo(
     () => companies.filter(c => founder.linkedCompanyIds?.includes(c.id)),
@@ -159,23 +164,22 @@ function FounderModal({
   );
 
   const saveEdit = () => {
-    onUpdate({
-      ...founder,
-      name: nameVal.trim() || founder.name,
+    onUpdate(current => ({
+      ...current,
+      name: nameVal.trim() || current.name,
       linkedinUrl: liVal.trim() || undefined,
       currentCompany: compVal.trim() || undefined,
       currentRole: roleVal.trim() || undefined,
       pastCompanies: pastVal.split(',').map(s => s.trim()).filter(Boolean),
       updatedAt: new Date().toISOString(),
-    });
+    }));
     setEdit(false);
   };
 
   const saveNotes = () => {
-    if (notesSavedRef.current) return;
-    notesSavedRef.current = true;
-    onUpdate({ ...founder, notes, updatedAt: new Date().toISOString() });
-    setTimeout(() => { notesSavedRef.current = false; }, 1000);
+    if (notes === lastSavedNotesRef.current) return;
+    lastSavedNotesRef.current = notes;
+    onUpdate(current => ({ ...current, notes, updatedAt: new Date().toISOString() }));
   };
 
   const runResearch = async () => {
@@ -183,16 +187,16 @@ function FounderModal({
     setResearchError(null);
     try {
       const result = await researchFounder(founder.name, founder.linkedinUrl, founder.currentCompany);
-      onUpdate({
-        ...founder,
-        currentCompany: result.currentCompany ?? founder.currentCompany,
-        currentRole: result.currentRole ?? founder.currentRole,
-        pastCompanies: result.pastCompanies?.length ? result.pastCompanies : founder.pastCompanies,
-        keyInsights: result.keyInsights?.length ? result.keyInsights : founder.keyInsights,
-        aiSummary: result.aiSummary ?? founder.aiSummary,
-        summaryUpdatedAt: result.aiSummary ? new Date().toISOString() : founder.summaryUpdatedAt,
+      onUpdate(current => ({
+        ...current,
+        currentCompany: result.currentCompany ?? current.currentCompany,
+        currentRole: result.currentRole ?? current.currentRole,
+        pastCompanies: result.pastCompanies?.length ? result.pastCompanies : current.pastCompanies,
+        keyInsights: result.keyInsights?.length ? result.keyInsights : current.keyInsights,
+        aiSummary: result.aiSummary ?? current.aiSummary,
+        summaryUpdatedAt: result.aiSummary ? new Date().toISOString() : current.summaryUpdatedAt,
         updatedAt: new Date().toISOString(),
-      });
+      }));
     } catch (e: any) {
       setResearchError(e?.message ?? 'Research failed');
     } finally {
@@ -406,7 +410,7 @@ function FounderCard({ founder, onClick }: { founder: FounderProfile; onClick: (
 interface Props {
   founders: FounderProfile[];
   companies: CompanyProfile[];
-  onChange: (founders: FounderProfile[]) => void;
+  onChange: React.Dispatch<React.SetStateAction<FounderProfile[]>>;
 }
 
 export function FoundersView({ founders, companies, onChange }: Props) {
@@ -430,15 +434,15 @@ export function FoundersView({ founders, companies, onChange }: Props) {
   const addFounder = (data: Omit<FounderProfile, 'id' | 'createdAt' | 'updatedAt'>) => {
     const now = new Date().toISOString();
     const founder: FounderProfile = { ...data, id: crypto.randomUUID(), createdAt: now, updatedAt: now };
-    onChange([founder, ...founders]);
+    onChange(prev => [founder, ...prev]);
   };
 
-  const updateFounder = (updated: FounderProfile) => {
-    onChange(founders.map(f => f.id === updated.id ? updated : f));
+  const updateFounder = (id: string, updater: (current: FounderProfile) => FounderProfile) => {
+    onChange(prev => prev.map(f => f.id === id ? updater(f) : f));
   };
 
   const deleteFounder = (id: string) => {
-    onChange(founders.filter(f => f.id !== id));
+    onChange(prev => prev.filter(f => f.id !== id));
   };
 
   return (
@@ -499,7 +503,7 @@ export function FoundersView({ founders, companies, onChange }: Props) {
         <FounderModal
           founder={selected}
           companies={companies}
-          onUpdate={updateFounder}
+          onUpdate={(updater) => updateFounder(selected.id, updater)}
           onDelete={() => deleteFounder(selected.id)}
           onClose={() => setSelectedId(null)}
         />
