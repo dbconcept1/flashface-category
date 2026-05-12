@@ -2,9 +2,9 @@ import { useState } from 'react';
 import {
   Headphones, Plus, Search, Trash2, RefreshCw, Play, ChevronRight,
   Loader2, CheckCircle2, AlertCircle, Lightbulb, TrendingUp, Mic,
-  BarChart2, BookOpen, Brain, ExternalLink, Zap
+  BarChart2, BookOpen, Brain, ExternalLink, Zap, UserCircle2, Link2
 } from 'lucide-react';
-import type { FounderPodcast, PodcastEpisode } from '../types';
+import type { FounderPodcast, PodcastEpisode, FounderProfile } from '../types';
 import { cn } from '../utils';
 
 interface Props {
@@ -12,17 +12,24 @@ interface Props {
   episodes: PodcastEpisode[];
   scanningFounderId: string | null;
   extractingEpisodeIds: string[];
+  founderProfiles: FounderProfile[];
+  /** Per-founder error messages shown inline under the founder card. */
+  scanErrors?: Record<string, string>;
   onAddFounder: (data: { founderName: string; channelQuery: string; description?: string }) => void;
   onDeleteFounder: (id: string) => void;
   onScanFounder: (founder: FounderPodcast) => void;
   onExtractEpisode: (episode: PodcastEpisode) => void;
   onDeleteEpisode: (id: string) => void;
   onSendToIntelBrain: (episode: PodcastEpisode) => void;
+  /** Create or navigate to the linked FounderProfile for this podcast founder. */
+  onLinkToFounderProfile: (founder: FounderPodcast) => void;
 }
 
 export function PodcastIntelView({
   founders, episodes, scanningFounderId, extractingEpisodeIds,
-  onAddFounder, onDeleteFounder, onScanFounder, onExtractEpisode, onDeleteEpisode, onSendToIntelBrain
+  founderProfiles, scanErrors,
+  onAddFounder, onDeleteFounder, onScanFounder, onExtractEpisode, onDeleteEpisode, onSendToIntelBrain,
+  onLinkToFounderProfile,
 }: Props) {
   const [selectedFounderId, setSelectedFounderId] = useState<string | null>(founders[0]?.id ?? null);
   const [showAddForm, setShowAddForm] = useState(founders.length === 0);
@@ -220,7 +227,7 @@ export function PodcastIntelView({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 mt-3">
+                  <div className="flex items-center gap-2 mt-3 flex-wrap">
                     <button
                       onClick={e => { e.stopPropagation(); onScanFounder(founder); }}
                       disabled={isScanning || !!scanningFounderId}
@@ -231,6 +238,24 @@ export function PodcastIntelView({
                         : <><Search className="w-3 h-3" />Scan for new</>
                       }
                     </button>
+                    {/* Create / view linked FounderProfile */}
+                    {founder.linkedFounderProfileId ? (
+                      <button
+                        onClick={e => { e.stopPropagation(); onLinkToFounderProfile(founder); }}
+                        title="Go to Founder Profile"
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-600/10 text-emerald-400 border border-emerald-500/20 rounded-lg text-xs font-medium transition-colors hover:bg-emerald-600/20"
+                      >
+                        <Link2 className="w-3 h-3" />Profile
+                      </button>
+                    ) : (
+                      <button
+                        onClick={e => { e.stopPropagation(); onLinkToFounderProfile(founder); }}
+                        title="Create a Founder Profile from this podcast entry"
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 bg-[#111] text-gray-500 border border-gray-800 rounded-lg text-xs font-medium transition-colors hover:text-gray-300 hover:border-gray-700"
+                      >
+                        <UserCircle2 className="w-3 h-3" />Create Profile
+                      </button>
+                    )}
                     <button
                       onClick={e => {
                         e.stopPropagation();
@@ -239,13 +264,21 @@ export function PodcastIntelView({
                           onDeleteFounder(founder.id);
                         }
                       }}
-                      className="p-1.5 text-gray-700 hover:text-rose-400 transition-colors rounded"
+                      className="p-1.5 text-gray-700 hover:text-rose-400 transition-colors rounded ml-auto"
                     >
                       <Trash2 className="w-3 h-3" />
                     </button>
                   </div>
 
-                  {founder.lastScanned && (
+                  {/* Inline scan error */}
+                  {scanErrors?.[founder.id] && (
+                    <div className="mt-2 px-2.5 py-1.5 bg-rose-900/20 border border-rose-500/25 rounded-lg flex items-start gap-1.5">
+                      <AlertCircle className="w-3 h-3 text-rose-400 shrink-0 mt-0.5" />
+                      <span className="text-[10px] text-rose-400 leading-relaxed">{scanErrors[founder.id]}</span>
+                    </div>
+                  )}
+
+                  {founder.lastScanned && !scanErrors?.[founder.id] && (
                     <p className="text-[10px] text-gray-700 mt-2">
                       Scanned {new Date(founder.lastScanned).toLocaleDateString('nl-NL')}
                     </p>

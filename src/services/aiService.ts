@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Category } from "../types";
-import { getApiKey, checkBudget, recordApiUsage } from "../lib/settings";
+import { getApiKey, checkBudget, recordGeminiUsageFromResponse, getPreferredModel } from "../lib/settings";
 
 /** Retries a Gemini API call with exponential backoff on rate-limit / transient errors */
 async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
@@ -42,6 +42,8 @@ export interface ResearchProgress {
   };
 }
 
+type ResearchAgentKey = keyof ResearchProgress['agents'];
+
 /** State tracked per-category while research is in-flight or recently completed. */
 export type CategoryResearchState = ResearchProgress & {
   /** queued = waiting in bulk queue | running = AI agents active | done = success | error = failed */
@@ -82,14 +84,18 @@ export async function agenticDeepResearchCategory(
   checkBudget();
 
   const ai = new GoogleGenAI({ apiKey });
-  const modelName = "gemini-2.5-flash";
+  const modelName = getPreferredModel();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const safeGenerate = async (params: any) => {
+  const safeGenerate = async (params: any, context: { operation: string; agent?: ResearchAgentKey }) => {
     checkBudget();
     const response = await retryWithBackoff(() => ai.models.generateContent(params));
-    const meta = (response as any).usageMetadata;
-    const hasGrounding = Array.isArray(params.config?.tools) && params.config.tools.some((t: any) => 'googleSearch' in t);
-    recordApiUsage(meta?.promptTokenCount ?? 0, meta?.candidatesTokenCount ?? 0, hasGrounding ? 1 : 0);
+    recordGeminiUsageFromResponse(params, response, {
+      feature: 'deep-research',
+      operation: context.operation,
+      agent: context.agent,
+      entityType: 'category',
+      entityName: category.name,
+    });
     return response;
   };
   
@@ -109,22 +115,22 @@ export async function agenticDeepResearchCategory(
   // Pass 1 uses googleSearch (plain text output).
   // Pass 2 extracts structured data from that text (JSON schema, no search tools).
 
-  const searchRaw = async (prompt: string): Promise<string> => {
+  const searchRaw = async (prompt: string, agent: ResearchAgentKey): Promise<string> => {
     const resp = await safeGenerate({
       model: modelName,
       contents: prompt,
       config: { tools: [{ googleSearch: {} }] },
-    });
+    }, { operation: 'grounded-search', agent });
     return resp.text?.trim() || '';
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const extractJson = async <T>(rawText: string, schema: any, hint: string): Promise<T> => {
+  const extractJson = async <T>(rawText: string, schema: any, hint: string, agent: ResearchAgentKey): Promise<T> => {
     const resp = await safeGenerate({
       model: modelName,
       contents: `${hint}\n\n---RESEARCH TEXT START---\n${rawText.slice(0, 30000)}\n---RESEARCH TEXT END---`,
       config: { responseMimeType: 'application/json', responseSchema: schema },
-    });
+    }, { operation: 'json-extraction', agent });
     return JSON.parse(resp.text?.trim() || '{}') as T;
   };
   // ───────────────────────────────────────────────────────────────────────────
@@ -150,12 +156,13 @@ export async function agenticDeepResearchCategory(
         - "${category.name}" subscription ARPU "average revenue per user"
         - "${category.name}" unit economics startup pitch deck investor
 
-        Keep CLV and CAC completely separate. Return a comprehensive breakdown with inline source citations.`);
+        Keep CLV and CAC completely separate. Return a comprehensive breakdown with inline source citations.`, 'unitEconomics');
       // Pass 2: extract numeric fields from the research text
       const extracted = await extractJson<{ estimatedCLV: number; estimatedCAC: number }>(
         raw,
         { type: Type.OBJECT, properties: { estimatedCLV: { type: Type.NUMBER }, estimatedCAC: { type: Type.NUMBER } }, required: ['estimatedCLV', 'estimatedCAC'] },
-        `From the research report below extract the estimated Customer Lifetime Value (CLV in Euros) and Customer Acquisition Cost (CAC in Euros). Return 0 for any value not clearly stated.`
+        `From the research report below extract the estimated Customer Lifetime Value (CLV in Euros) and Customer Acquisition Cost (CAC in Euros). Return 0 for any value not clearly stated.`,
+        'unitEconomics'
       );
       updateAgent('unitEconomics', 'completed', 'Unit economics finalized.');
       return { result: { estimatedCLV: extracted.estimatedCLV, estimatedCAC: extracted.estimatedCAC }, raw, sources: [] };
@@ -186,7 +193,7 @@ MANDATORY SEARCHES:
 - "${category.name}" micro-niche DTC opportunity 2025 2026
 
 ANTI-HALLUCINATION: Every figure must cite a real URL. Write "Unknown (no source found)" for unverifiable data.
-Return comprehensive markdown covering market size, churn, CAGR, consumer psychology, and the full funnel.`);
+Return comprehensive markdown covering market size, churn, CAGR, consumer psychology, and the full funnel.`, 'marketDynamics');
 
       // Pass 2: extract structured fields
       const extractSchema = {
@@ -214,7 +221,8 @@ Return comprehensive markdown covering market size, churn, CAGR, consumer psycho
       };
       const extracted = await extractJson<Record<string, any>>(
         raw, extractSchema,
-        `From the market research report below, extract all structured market data fields. Use 0 for missing numbers, "Unknown" for missing strings, and false for missing booleans.`
+        `From the market research report below, extract all structured market data fields. Use 0 for missing numbers, "Unknown" for missing strings, and false for missing booleans.`,
+        'marketDynamics'
       );
       updateAgent('marketDynamics', 'completed', 'Market dynamics mapped.');
       return { result: extracted, raw, sources: [] };
@@ -241,7 +249,7 @@ Return comprehensive markdown covering market size, churn, CAGR, consumer psycho
         - intitle:review "${category.name}" Netherlands OR Belgian competitor
         - "${category.name}" site:similarweb.com monthly visits NL competitor
 
-        For each of 2-4 real competitors: company name, URL, monthly traffic estimate (SimilarWeb), pricing, Trustpilot score, positioning angle, and key gap/weakness to exploit.`);
+        For each of 2-4 real competitors: company name, URL, monthly traffic estimate (SimilarWeb), pricing, Trustpilot score, positioning angle, and key gap/weakness to exploit.`, 'localCompetitors');
       updateAgent('localCompetitors', 'completed', 'Local competition analyzed.');
       return { raw, sources: [] };
     } catch (e: any) {
@@ -267,7 +275,7 @@ Return comprehensive markdown covering market size, churn, CAGR, consumer psycho
         - "${category.name}" Inc5000 OR Deloitte Fast500 fastest growing DTC
         - "${category.name}" podcast interview founder scaling unit economics
 
-        Identify what makes the top 1-2 global players successful: exact growth channels, retention mechanics, product diff, unit economics.`);
+        Identify what makes the top 1-2 global players successful: exact growth channels, retention mechanics, product diff, unit economics.`, 'globalCompetitors');
       updateAgent('globalCompetitors', 'completed', 'Global benchmarks identified.');
       return { raw, sources: [] };
     } catch (e: any) {
@@ -281,12 +289,13 @@ Return comprehensive markdown covering market size, churn, CAGR, consumer psycho
     try {
       // Pass 1: grounded search
       const raw = await searchRaw(`You are a Dutch Legal and E-commerce Compliance Expert. Analyze the category: "${category.name}" for the Netherlands market. Is it legal? Does it require special licenses? Is it a restricted ad category on Meta/Google?
-        ANTI-HALLUCINATION: Only cite legal requirements found via search on official sources (overheid.nl, autoriteitpersoonsgegevens.nl, reclame.code.nl). Write "Unverified — consult a Dutch e-commerce lawyer" for anything not verified.`);
+        ANTI-HALLUCINATION: Only cite legal requirements found via search on official sources (overheid.nl, autoriteitpersoonsgegevens.nl, reclame.code.nl). Write "Unverified — consult a Dutch e-commerce lawyer" for anything not verified.`, 'legalLogistics');
       // Pass 2: extract structured fields
       const extracted = await extractJson<{ regulatoryRiskNL: string; legalAndAdRestrictions: string }>(
         raw,
         { type: Type.OBJECT, properties: { regulatoryRiskNL: { type: Type.STRING, enum: ['Low', 'Medium', 'High'] }, legalAndAdRestrictions: { type: Type.STRING } }, required: ['regulatoryRiskNL', 'legalAndAdRestrictions'] },
-        `From the legal research report below, extract: regulatoryRiskNL (must be exactly Low/Medium/High) and legalAndAdRestrictions (a summary of legal and ad restrictions in the Netherlands).`
+        `From the legal research report below, extract: regulatoryRiskNL (must be exactly Low/Medium/High) and legalAndAdRestrictions (a summary of legal and ad restrictions in the Netherlands).`,
+        'legalLogistics'
       );
       updateAgent('legalLogistics', 'completed', 'Legal and compliance checked.');
       return { result: { regulatoryRiskNL: extracted.regulatoryRiskNL as any, legalAndAdRestrictions: extracted.legalAndAdRestrictions }, raw, sources: [] };
@@ -314,7 +323,7 @@ Return comprehensive markdown covering market size, churn, CAGR, consumer psycho
         - "${category.name}" COGs "cost of goods" subscription box benchmark
         - "${category.name}" MOQ minimum order e-commerce startup
 
-        Provide: real supplier names, MOQ, unit cost, estimated COGs%, and a full MVP budget breakdown from €0 to 100 subscribers in NL.`);
+        Provide: real supplier names, MOQ, unit cost, estimated COGs%, and a full MVP budget breakdown from €0 to 100 subscribers in NL.`, 'suppliersBudget');
       updateAgent('suppliersBudget', 'completed', 'Suppliers and budget analyzed.');
       return { raw, sources: [] };
     } catch (e: any) {
@@ -343,7 +352,7 @@ MANDATORY SEARCHES — run ALL of these:
 - "${category.name}" Nederlandse influencer samenwerking OR NL creator partnership
 - "${category.name}" ad fatigue creative refresh cycle subscription
 
-Return a comprehensive paid-media intelligence report covering: channel CAC breakdown table, Meta/TikTok/Google tactics, influencer/UGC strategy, 2026-specific opportunities, and creative hooks. ANTI-HALLUCINATION: All CPM/CPC/ROAS/CAC figures must trace to a real source URL from this session.`);
+Return a comprehensive paid-media intelligence report covering: channel CAC breakdown table, Meta/TikTok/Google tactics, influencer/UGC strategy, 2026-specific opportunities, and creative hooks. ANTI-HALLUCINATION: All CPM/CPC/ROAS/CAC figures must trace to a real source URL from this session.`, 'adIntelligence');
       updateAgent('adIntelligence', 'completed', 'Ad intelligence mapped.');
       return { raw, sources: [] };
     } catch (e: any) {
@@ -372,7 +381,7 @@ MANDATORY SEARCHES — run ALL of these:
 - site:reddit.com/r/ecommerce "${category.name}" retention churn
 - "${category.name}" cancellation survey top reasons
 
-Return a full retention engineering report covering: retention benchmarks table, churn drivers, subscription term economics, win-back playbook, dunning defense, referral/loyalty uplift, and 2026 tactics. ANTI-HALLUCINATION: Cite real source URLs from this session.`);
+Return a full retention engineering report covering: retention benchmarks table, churn drivers, subscription term economics, win-back playbook, dunning defense, referral/loyalty uplift, and 2026 tactics. ANTI-HALLUCINATION: Cite real source URLs from this session.`, 'retentionEngineering');
       updateAgent('retentionEngineering', 'completed', 'Retention engineering report complete.');
       return { raw, sources: [] };
     } catch (e: any) {
@@ -386,7 +395,7 @@ Return a full retention engineering report covering: retention benchmarks table,
     try {
       const raw = await searchRaw(`You are an elite talent scout and investigative journalist. Find the founders or key people of the top 3 companies in the category: "${category.name}".
         ANTI-HALLUCINATION RULE FOR LINKEDIN URLS: Only include a LinkedIn URL if actually retrieved via Google Search in this session. If not found via search, write "LinkedIn: [not found in search]" instead of guessing.
-        METHOD: Search site:linkedin.com/in/ "[Founder Name]" "[Company]", also search for podcast transcripts, news articles, Crunchbase profiles, and previous exits. Only include facts traceable to a real search result. Return factual bios in Markdown.`);
+        METHOD: Search site:linkedin.com/in/ "[Founder Name]" "[Company]", also search for podcast transcripts, news articles, Crunchbase profiles, and previous exits. Only include facts traceable to a real search result. Return factual bios in Markdown.`, 'foundersAndTeam');
       updateAgent('foundersAndTeam', 'completed', 'Founders identified.');
       return { raw, sources: [] };
     } catch (e: any) {
@@ -413,7 +422,7 @@ Google Trends scores are RELATIVE (0-100). Always compare to anchor categories (
 
 Return a comprehensive markdown report covering: interest scores (NL + global), trend direction (12 months), YoY comparison, seasonal patterns, rising queries, Dutch-specific terms, geographic distribution, and launch timing recommendations.
 
-ANTI-HALLUCINATION: Only return scores retrieved from real searches. Write "[score not retrieved]" if data not accessible.`);
+ANTI-HALLUCINATION: Only return scores retrieved from real searches. Write "[score not retrieved]" if data not accessible.`, 'searchTrends');
       updateAgent('searchTrends', 'completed', 'Search trends data retrieved.');
       return { raw, sources: [] };
     } catch (e: any) {
@@ -490,14 +499,17 @@ export async function discoverDtcCategories(
   if (!apiKey) throw new Error("No Gemini API key configured. Add your key in Settings.");
   checkBudget();
   const ai = new GoogleGenAI({ apiKey });
-  const modelName = "gemini-2.5-flash";
+  const modelName = getPreferredModel();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const safeGenerate = async (params: any) => {
+  const safeGenerate = async (params: any, context: { operation: string; entityName?: string }) => {
     checkBudget();
     const response = await retryWithBackoff(() => ai.models.generateContent(params));
-    const meta = (response as any).usageMetadata;
-    const hasGrounding = Array.isArray(params.config?.tools) && params.config.tools.some((t: any) => 'googleSearch' in t);
-    recordApiUsage(meta?.promptTokenCount ?? 0, meta?.candidatesTokenCount ?? 0, hasGrounding ? 1 : 0);
+    recordGeminiUsageFromResponse(params, response, {
+      feature: 'discovery-swarm',
+      operation: context.operation,
+      entityType: context.entityName ? 'sector' : 'discovery',
+      entityName: context.entityName,
+    });
     return response;
   };
 
@@ -598,7 +610,7 @@ For each sector provide: the sector name, and at least one real named DTC busine
         config: {
           tools: [{ googleSearch: {} }]
         }
-      });
+      }, { operation: 'sector-grounded-search' });
       if (signal.aborted) return;
 
       const sectorRawText = sectorRawResp.text?.trim() || '';
@@ -612,7 +624,7 @@ For each sector provide: the sector name, and at least one real named DTC busine
           responseMimeType: "application/json",
           responseSchema: sectorSchema
         }
-      });
+      }, { operation: 'sector-json-extraction' });
       if (signal.aborted) return;
 
       sectors = JSON.parse(sectorExtractResp.text?.trim() || '{}').sectors || [];
@@ -687,7 +699,7 @@ Write plain text — no JSON yet. Just thorough research notes.`,
           config: {
             tools: [{ googleSearch: {} }]
           }
-        });
+        }, { operation: 'category-grounded-search', entityName: sector });
         if (signal.aborted) return;
 
         const catRawText = catRawResp.text?.trim() || '';
@@ -710,7 +722,7 @@ Write plain text — no JSON yet. Just thorough research notes.`,
             responseMimeType: "application/json",
             responseSchema: categorySchema
           }
-        });
+        }, { operation: 'category-json-extraction', entityName: sector });
         if (signal.aborted) return;
 
         const data = JSON.parse(catExtractResp.text?.trim() || "{}");
@@ -755,14 +767,17 @@ export async function extractCompanyFromImage(
   if (!apiKey) throw new Error("No Gemini API key configured. Add your key in Settings.");
 
   const ai = new GoogleGenAI({ apiKey });
-  const modelName = "gemini-2.5-flash";
+  const modelName = getPreferredModel();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const go = async (params: any) => {
+  const go = async (params: any, context: { operation: string; entityName?: string }) => {
     checkBudget();
     const response = await retryWithBackoff(() => ai.models.generateContent(params));
-    const meta = (response as any).usageMetadata;
-    const hasGrounding = Array.isArray(params.config?.tools) && params.config.tools.some((t: any) => 'googleSearch' in t);
-    recordApiUsage(meta?.promptTokenCount ?? 0, meta?.candidatesTokenCount ?? 0, hasGrounding ? 1 : 0);
+    recordGeminiUsageFromResponse(params, response, {
+      feature: 'company-image-extraction',
+      operation: context.operation,
+      entityType: 'company',
+      entityName: context.entityName,
+    });
     return response;
   };
   const report = (msg: string) => onProgress?.(msg);
@@ -831,7 +846,7 @@ Match to an existing category if relevant: [${input.existingCategoryNames?.join(
         { inlineData: { data: input.imageData, mimeType: input.mimeType } }
       ],
       config: { responseMimeType: "application/json", responseSchema: pass1Schema },
-    });
+    }, { operation: 'pass1-brand-identification' });
     pass1Data = JSON.parse(res.text?.trim() || '{}');
   } catch (e: any) {
     report(`Pass 1 error: ${e.message}`);
@@ -880,12 +895,12 @@ ANTI-HALLUCINATION — non-negotiable:
 - Employee count: only report the exact range LinkedIn shows. Never estimate.
 - All facts must trace to a URL. Write "Not found via search" if unavailable.`,
       config: { tools: [{ googleSearch: {} }] },
-    });
+    }, { operation: 'pass2-grounded-search', entityName: companyName });
     const pass2Res = await go({
       model: modelName,
       contents: `Extract structured founders/team data about "${companyName}" from this research:\n\n---START---\n${(res.text?.trim() || '').slice(0, 30000)}\n---END---`,
       config: { responseMimeType: "application/json", responseSchema: pass2Schema },
-    });
+    }, { operation: 'pass2-json-extraction', entityName: companyName });
     pass2Data = JSON.parse(pass2Res.text?.trim() || '{}');
   } catch (e: any) {
     report(`Pass 2 error: ${e.message}`);
@@ -934,12 +949,12 @@ MANDATORY SEARCHES — run ALL of these:
 
 ANTI-HALLUCINATION: Every figure must trace to a real URL from this session. If no funding found, write "No funding found via search — likely bootstrapped or undisclosed". Never invent investors, round sizes, or revenue.`,
       config: { tools: [{ googleSearch: {} }] },
-    });
+    }, { operation: 'pass3-grounded-search', entityName: companyName });
     const pass3Res = await go({
       model: modelName,
       contents: `Extract structured funding and traction data about "${companyName}" from this research:\n\n---START---\n${(res.text?.trim() || '').slice(0, 30000)}\n---END---`,
       config: { responseMimeType: "application/json", responseSchema: pass3Schema },
-    });
+    }, { operation: 'pass3-json-extraction', entityName: companyName });
     pass3Data = JSON.parse(pass3Res.text?.trim() || '{}');
   } catch (e: any) {
     report(`Pass 3 error: ${e.message}`);
@@ -986,12 +1001,12 @@ MANDATORY SEARCHES — run ALL of these:
 
 ANTI-HALLUCINATION: Social handles must come from real search results. Never construct @handles. All facts must have source URLs. Write "Not found via search" for anything not confirmed.`,
       config: { tools: [{ googleSearch: {} }] },
-    });
+    }, { operation: 'pass4-grounded-search', entityName: companyName });
     const pass4Res = await go({
       model: modelName,
       contents: `Extract structured PR, social media, and competitive data about "${companyName}" from this research:\n\n---START---\n${(res.text?.trim() || '').slice(0, 30000)}\n---END---`,
       config: { responseMimeType: "application/json", responseSchema: pass4Schema },
-    });
+    }, { operation: 'pass4-json-extraction', entityName: companyName });
     pass4Data = JSON.parse(pass4Res.text?.trim() || '{}');
   } catch (e: any) {
     report(`Pass 4 error: ${e.message}`);
@@ -1117,15 +1132,18 @@ export async function extractCategoriesFromText(input: { text?: string; fileData
   if (!apiKey) throw new Error("No Gemini API key configured. Add your key in Settings.");
 
   const ai = new GoogleGenAI({ apiKey });
-  const modelName = "gemini-2.5-flash";
+  const modelName = getPreferredModel();
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const safeGenerate = async (params: any) => {
     checkBudget();
     const response = await retryWithBackoff(() => ai.models.generateContent(params));
-    const meta = (response as any).usageMetadata;
-    const hasGrounding = Array.isArray(params.config?.tools) && params.config.tools.some((t: any) => 'googleSearch' in t);
-    recordApiUsage(meta?.promptTokenCount ?? 0, meta?.candidatesTokenCount ?? 0, hasGrounding ? 1 : 0);
+    recordGeminiUsageFromResponse(params, response, {
+      feature: 'document-import',
+      operation: 'extract-categories',
+      entityType: input.fileData ? 'document' : 'text',
+      entityName: input.range ? `pages ${input.range.currentPage}-${input.range.endPage}` : undefined,
+    });
     return response;
   };
 

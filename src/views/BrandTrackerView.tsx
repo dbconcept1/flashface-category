@@ -1,9 +1,9 @@
 import { useState, useMemo } from 'react';
-import { TrackedBrand, Category } from '../types';
+import { TrackedBrand, Category, CompanyProfile } from '../types';
 import {
   Bookmark, Plus, X, Loader2, AlertCircle, RefreshCw,
   ExternalLink, CheckCircle2, ArrowRight, ChevronDown, ChevronUp,
-  Tag, Zap, CalendarClock, Megaphone,
+  Tag, Zap, CalendarClock, Megaphone, Building2,
 } from 'lucide-react';
 import { cn } from '../utils';
 import type { BrandInput } from '../services/brandService';
@@ -21,6 +21,10 @@ interface Props {
   onToggleSchedule: (id: string) => void;
   /** Existing categories — used to indicate if a category already exists. */
   categories: Category[];
+  /** Existing company profiles — used to show linked status. */
+  companies: CompanyProfile[];
+  /** Create or navigate to a linked CompanyProfile for this brand. */
+  onLinkToCompany: (brandId: string) => void;
 }
 
 // ─── Ad channel color map ─────────────────────────────────────────────────────
@@ -102,13 +106,15 @@ function ErrorCard({ brand, onRetry, onDelete }: { brand: TrackedBrand; onRetry:
 
 /** Complete brand intel card */
 function BrandCard({
-  brand, onDelete, onAddToCategories, onToggleSchedule, isLinked,
+  brand, onDelete, onAddToCategories, onToggleSchedule, isLinked, onLinkToCompany, hasLinkedCompany,
 }: {
   brand: TrackedBrand;
   onDelete: () => void;
   onAddToCategories: () => void;
   onToggleSchedule: () => void;
   isLinked: boolean;
+  onLinkToCompany: () => void;
+  hasLinkedCompany: boolean;
   categories?: Category[];
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -252,6 +258,24 @@ function BrandCard({
             >
               <Megaphone className="w-3 h-3" /> Meta Ads
             </a>
+            {/* Company Intel link */}
+            {hasLinkedCompany ? (
+              <button
+                onClick={onLinkToCompany}
+                title="Go to Company Profile"
+                className="flex items-center gap-1.5 text-xs text-emerald-500 hover:text-emerald-400 border border-emerald-500/20 hover:border-emerald-500/35 px-3 py-1.5 rounded-lg transition-all"
+              >
+                <Building2 className="w-3 h-3" /> Company Intel ✓
+              </button>
+            ) : (
+              <button
+                onClick={onLinkToCompany}
+                title="Create a Company Intelligence profile for this brand"
+                className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-300 border border-gray-800 hover:border-gray-700 px-3 py-1.5 rounded-lg transition-all"
+              >
+                <Building2 className="w-3 h-3" /> Company Intel
+              </button>
+            )}
             {/* Weekly schedule toggle */}
             <button
               onClick={onToggleSchedule}
@@ -369,7 +393,7 @@ function BrandCard({
 
 // ─── Main view ────────────────────────────────────────────────────────────────
 
-export function BrandTrackerView({ brands, onAdd, onDelete, onRetry, onAddToCategories, onToggleSchedule, categories }: Props) {
+export function BrandTrackerView({ brands, onAdd, onDelete, onRetry, onAddToCategories, onToggleSchedule, categories, companies, onLinkToCompany }: Props) {
   const [showModal, setShowModal]     = useState(false);
   const [filterStatus, setFilterStatus] = useState<'all' | TrackedBrand['status']>('all');
   const [form, setForm]               = useState({ name: '', url: '', description: '' });
@@ -398,6 +422,7 @@ export function BrandTrackerView({ brands, onAdd, onDelete, onRetry, onAddToCate
   }), [brands]);
 
   const linkedIds = useMemo(() => new Set(brands.filter(b => !!b.linkedCategoryId).map(b => b.id)), [brands]);
+  const linkedCompanyIds = useMemo(() => new Set(brands.filter(b => !!b.linkedCompanyId).map(b => b.id)), [brands]);
 
   return (
     <div className="space-y-6">
@@ -490,6 +515,8 @@ export function BrandTrackerView({ brands, onAdd, onDelete, onRetry, onAddToCate
                 onAddToCategories={() => onAddToCategories(brand)}
                 onToggleSchedule={() => onToggleSchedule(brand.id)}
                 isLinked={linkedIds.has(brand.id)}
+                onLinkToCompany={() => onLinkToCompany(brand.id)}
+                hasLinkedCompany={linkedCompanyIds.has(brand.id)}
                 categories={categories}
               />
             );

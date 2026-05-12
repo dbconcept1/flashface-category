@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react';
-import { Key, Eye, EyeOff, Euro, AlertTriangle, CheckCircle2, Info, RotateCcw, ExternalLink, GitBranch } from 'lucide-react';
-import { getSettings, saveSettings, resetSpending, AppSettings, PRICING_EUR, calcBudgetPercent } from '../lib/settings';
+import { useState, useCallback, useEffect } from 'react';
+import { Key, Eye, EyeOff, Euro, AlertTriangle, CheckCircle2, Info, RotateCcw, ExternalLink, GitBranch, Copy, PlugZap, RefreshCw, Shield, BarChart3 } from 'lucide-react';
+import { getSettings, saveSettings, resetSpending, AppSettings, PRICING_EUR, calcBudgetPercent, getApiUsageAuditSummary } from '../lib/settings';
+import { getChatGptConnectorStatus, rotateChatGptConnectorToken, type ChatGptConnectorStatus } from '../lib/chatgptConnector';
 import { cn } from '../utils';
 
 function useSettings() {
@@ -15,7 +16,13 @@ function useSettings() {
 }
 
 export function SettingsView({ onRefreshSpending }: { onRefreshSpending?: () => void }) {
-  const { settings, update } = useSettings();
+  const { settings, refresh, update } = useSettings();
+  const [connectorStatus, setConnectorStatus] = useState<ChatGptConnectorStatus | null>(null);
+  const [connectorLoading, setConnectorLoading] = useState(true);
+  const [connectorBusy, setConnectorBusy] = useState(false);
+  const [connectorError, setConnectorError] = useState<string | null>(null);
+  const [connectorToken, setConnectorToken] = useState('');
+  const [copiedField, setCopiedField] = useState<string | null>(null);
 
   // OpenAI key section
   const [openaiKeyInput, setOpenaiKeyInput] = useState('');
@@ -55,6 +62,51 @@ export function SettingsView({ onRefreshSpending }: { onRefreshSpending?: () => 
   const [ghTokenSaved, setGhTokenSaved] = useState(false);
 
   const hasGhToken = !!settings.githubToken;
+
+  const loadConnectorStatus = useCallback(async () => {
+    setConnectorLoading(true);
+    setConnectorError(null);
+    try {
+      const status = await getChatGptConnectorStatus();
+      setConnectorStatus(status);
+    } catch (error: any) {
+      setConnectorError(error?.message ?? 'Failed to load connector status');
+    } finally {
+      setConnectorLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadConnectorStatus();
+  }, [loadConnectorStatus]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      refresh();
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
+
+  const handleRotateConnectorToken = async () => {
+    setConnectorBusy(true);
+    setConnectorError(null);
+    try {
+      const result = await rotateChatGptConnectorToken();
+      setConnectorStatus(result);
+      setConnectorToken(result.token);
+    } catch (error: any) {
+      setConnectorError(error?.message ?? 'Failed to rotate connector token');
+    } finally {
+      setConnectorBusy(false);
+    }
+  };
+
+  const handleCopy = async (text: string, field: string) => {
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
+    setCopiedField(field);
+    setTimeout(() => setCopiedField(null), 2500);
+  };
 
   const handleSaveGhToken = () => {
     const trimmed = ghTokenInput.trim();
@@ -128,6 +180,8 @@ export function SettingsView({ onRefreshSpending }: { onRefreshSpending?: () => 
   const pct = calcBudgetPercent(settings);
   const isOverBudget = settings.budgetLimitEur !== null && settings.spendingEur >= settings.budgetLimitEur;
   const isNearBudget = !isOverBudget && pct >= 80;
+  const auditSummary = getApiUsageAuditSummary();
+  const formatCost = (value: number) => `€${value >= 0.1 ? value.toFixed(2) : value.toFixed(3)}`;
 
   return (
     <div className="max-w-2xl mx-auto space-y-8">
@@ -429,6 +483,228 @@ export function SettingsView({ onRefreshSpending }: { onRefreshSpending?: () => 
           </div>
         </div>
       </section>
+
+      {/* ─── ChatGPT Actions API ───────────────────── */}
+      <section className="bg-[#0d0d0d] border border-[#1e1e1e] rounded-xl p-6 space-y-5">
+        <div className="flex items-center gap-2 flex-wrap">
+          <PlugZap className="w-4 h-4 text-cyan-400 shrink-0" />
+          <h3 className="text-sm font-bold text-[#f0f0f0] uppercase tracking-[0.1em]">ChatGPT Actions API</h3>
+          <span className={cn(
+            'ml-auto text-[10px] font-mono px-2 py-0.5 rounded border uppercase tracking-wider',
+            connectorStatus?.configured
+              ? 'text-[#4ade80] bg-[#4ade80]/08 border-[#4ade80]/15'
+              : 'text-[#484848] bg-[#1a1a1a]/50 border-[#252525]'
+          )}>
+            {connectorLoading
+              ? '… Loading'
+              : connectorStatus?.configured
+              ? '✓ Token active'
+              : '✕ Not configured'}
+          </span>
+        </div>
+
+        <p className="text-xs text-[#666]">
+          Create a read-only bearer token for your own ChatGPT.com GPT Actions setup. ChatGPT can then pull live FlashFace data directly instead of relying on pasted session text.
+        </p>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={handleRotateConnectorToken}
+            disabled={connectorBusy}
+            className="px-4 py-2 bg-cyan-700 hover:bg-cyan-600 text-[#f0f0f0] rounded-lg text-sm font-bold transition-colors disabled:opacity-40 flex items-center gap-2"
+          >
+            {connectorBusy ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
+            {connectorStatus?.configured ? 'Rotate Token' : 'Generate Token'}
+          </button>
+          <button
+            onClick={loadConnectorStatus}
+            disabled={connectorLoading}
+            className="px-4 py-2 bg-[#1a1a1a] hover:bg-[#222] text-[#aaa] rounded-lg text-sm font-medium transition-colors disabled:opacity-40 flex items-center gap-2"
+          >
+            <RefreshCw className={cn('w-4 h-4', connectorLoading && 'animate-spin')} />
+            Refresh Status
+          </button>
+        </div>
+
+        {connectorError && (
+          <div className="flex items-start gap-2 bg-[#f87171]/08 border border-[#f87171]/15 rounded-lg px-4 py-3 text-xs text-rose-300">
+            <AlertTriangle className="w-3.5 h-3.5 text-[#f87171] shrink-0 mt-0.5" />
+            <span>{connectorError}</span>
+          </div>
+        )}
+
+        {connectorStatus && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+              <div className="bg-[#111] rounded-lg p-3 space-y-1">
+                <p className="text-[#484848] uppercase tracking-[0.1em]">API Base</p>
+                <p className="font-mono text-[#aaa] break-all">{connectorStatus.apiBaseUrl}</p>
+              </div>
+              <div className="bg-[#111] rounded-lg p-3 space-y-1">
+                <p className="text-[#484848] uppercase tracking-[0.1em]">Token Status</p>
+                <p className="font-mono text-[#aaa]">{connectorStatus.tokenPreview || 'No token yet'}</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="bg-[#111] border border-[#252525] rounded-lg px-4 py-3 text-xs font-mono text-cyan-300 break-all">
+                {connectorStatus.openApiUrl}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => handleCopy(connectorStatus.openApiUrl, 'openapi')}
+                  className="px-3 py-2 bg-[#1a1a1a] hover:bg-[#222] text-[#aaa] rounded-lg text-xs font-medium transition-colors flex items-center gap-2"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  {copiedField === 'openapi' ? 'OpenAPI URL Copied' : 'Copy OpenAPI URL'}
+                </button>
+                <button
+                  onClick={() => handleCopy(connectorStatus.snapshotUrl, 'snapshot')}
+                  className="px-3 py-2 bg-[#1a1a1a] hover:bg-[#222] text-[#aaa] rounded-lg text-xs font-medium transition-colors flex items-center gap-2"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  {copiedField === 'snapshot' ? 'Snapshot URL Copied' : 'Copy Snapshot URL'}
+                </button>
+              </div>
+            </div>
+
+            {connectorToken && (
+              <div className="bg-cyan-500/5 border border-cyan-500/15 rounded-lg p-4 space-y-3">
+                <div>
+                  <p className="text-xs font-semibold text-cyan-300">New bearer token</p>
+                  <p className="text-[11px] text-[#666] mt-1">Shown once after generation/rotation. Copy it into ChatGPT Actions now.</p>
+                </div>
+                <div className="bg-[#081014] border border-cyan-500/20 rounded-lg px-4 py-3 text-xs font-mono text-cyan-200 break-all">
+                  {connectorToken}
+                </div>
+                <button
+                  onClick={() => handleCopy(connectorToken, 'token')}
+                  className="px-3 py-2 bg-cyan-700 hover:bg-cyan-600 text-[#f0f0f0] rounded-lg text-xs font-bold transition-colors flex items-center gap-2"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  {copiedField === 'token' ? 'Token Copied' : 'Copy Bearer Token'}
+                </button>
+              </div>
+            )}
+
+            {connectorStatus.requiresPublicHttps && (
+              <div className="flex items-start gap-2 bg-[#e05000]/08 border border-[#e05000]/15 rounded-lg px-4 py-3 text-xs text-[#f0b37e]">
+                <AlertTriangle className="w-3.5 h-3.5 text-[#e05000] shrink-0 mt-0.5" />
+                <span>
+                  ChatGPT.com can only call a public HTTPS URL. If you are on localhost or a private port, make this Vite port public in Codespaces or deploy the app first.
+                </span>
+              </div>
+            )}
+
+            <div className="bg-blue-500/5 border border-blue-500/15 rounded-lg px-4 py-3 text-xs text-[#666] space-y-2">
+              <div className="flex items-start gap-2">
+                <Info className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <p><span className="text-[#f0f0f0] font-semibold">Setup in ChatGPT.com:</span></p>
+                  <p>1. Open your GPT builder → Configure → Actions.</p>
+                  <p>2. Import the schema from the OpenAPI URL above.</p>
+                  <p>3. Use bearer auth and paste the generated token.</p>
+                  <p>4. Call <span className="font-mono text-cyan-300">getFlashFaceSnapshot</span> for the full app state, or the narrower category/brain/conversation endpoints when needed.</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-emerald-500/5 border border-emerald-500/15 rounded-lg px-4 py-3 text-xs text-[#666] space-y-1">
+              <p><span className="text-[#4ade80] font-semibold">What is included:</span> categories, Brain OS entries, saved conversations, intel notes, finance scenarios, tracked brands, company profiles, ideas, founders, founder podcasts, and podcast episodes.</p>
+              <p><span className="text-[#4ade80] font-semibold">How freshness works:</span> categories, brain, and conversations are read directly from server files. Browser-only datasets are mirrored to the connector while this app is open.</p>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* ─── AI Model Selection ──────────────────────── */}
+      <section className="bg-[#0d0d0d] border border-[#1e1e1e] rounded-xl p-6 space-y-5">
+        <div className="flex items-center gap-2">
+          <svg className="w-4 h-4 text-[#60a5fa] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          <h3 className="text-sm font-bold text-[#f0f0f0] uppercase tracking-[0.1em]">AI Model</h3>
+          <span className="text-[10px] text-[#444] uppercase tracking-widest">Cost Optimizer</span>
+        </div>
+        <p className="text-xs text-[#555]">
+          Select the Gemini model used for deep category research. Lower-tier models run faster and at significantly lower cost — ideal for bulk discovery and initial research.
+        </p>
+        <div className="space-y-2">
+          {([
+            {
+              id: 'gemini-2.0-flash',
+              label: 'Gemini 2.0 Flash',
+              badge: 'Cheapest',
+              badgeColor: '#4ade80',
+              desc: 'Fastest, lowest cost. ~70% cheaper than 2.5 Flash. No thinking tokens. Best for bulk runs.',
+              costNote: '~€0.05/M input · €0.20/M output',
+            },
+            {
+              id: 'gemini-2.5-flash',
+              label: 'Gemini 2.5 Flash',
+              badge: 'Recommended',
+              badgeColor: '#e65200',
+              desc: 'Default. Thinking + Google Search grounding. Best accuracy-to-cost ratio for agent research.',
+              costNote: '~€0.14/M input · €0.55/M output',
+            },
+            {
+              id: 'gemini-2.5-pro',
+              label: 'Gemini 2.5 Pro',
+              badge: 'Most Capable',
+              badgeColor: '#a78bfa',
+              desc: 'Highest accuracy and reasoning depth. Use for critical final analysis only. Slowest & most expensive.',
+              costNote: '~€1.25/M input · €5.00/M output',
+            },
+          ] as const).map(model => {
+            const isActive = (settings.preferredResearchModel || 'gemini-2.5-flash') === model.id;
+            return (
+              <button
+                key={model.id}
+                onClick={() => update({ preferredResearchModel: model.id })}
+                className={cn(
+                  'w-full text-left rounded-lg border px-4 py-3 transition-all',
+                  isActive ? 'border-[#e65200]/40 bg-[#e65200]/05' : 'border-[#1e1e1e] bg-[#111] hover:border-[#2a2a2a]'
+                )}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <div className={cn('w-2 h-2 rounded-full shrink-0', isActive ? 'bg-[#e65200]' : 'bg-[#2a2a2a]')}></div>
+                    <span className={cn('text-sm font-semibold', isActive ? 'text-[#efefef]' : 'text-[#666]')}>{model.label}</span>
+                    <span className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded"
+                      style={{color: model.badgeColor, background: `${model.badgeColor}15`}}>
+                      {model.badge}
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono text-[#333]">{model.costNote}</span>
+                </div>
+                <p className="text-[11px] text-[#444] pl-4">{model.desc}</p>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Stale research TTL */}
+        <div className="border-t border-[#1e1e1e] pt-4">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <p className="text-xs font-semibold text-[#aaa]">Research Freshness (days)</p>
+              <p className="text-[10px] text-[#444] mt-0.5">Categories researched older than this will show a "Stale" badge prompting a refresh</p>
+            </div>
+            <span className="text-sm font-mono text-[#e65200]">{settings.researchStaleDays ?? 30}d</span>
+          </div>
+          <input
+            type="range"
+            min={7}
+            max={90}
+            step={7}
+            value={settings.researchStaleDays ?? 30}
+            onChange={e => update({ researchStaleDays: parseInt(e.target.value) })}
+            className="w-full accent-[#e65200] h-1 bg-[#1e1e1e] rounded-lg"
+          />
+          <div className="flex justify-between text-[9px] text-[#2a2a2a] mt-1">
+            <span>7d</span><span>30d</span><span>60d</span><span>90d</span>
+          </div>
+        </div>
+      </section>
+
       {/* ─── Budget / Spending ───────────────────────── */}
       <section className="bg-[#0d0d0d] border border-[#1e1e1e] rounded-xl p-6 space-y-5">
         <div className="flex items-center gap-2">
@@ -535,6 +811,128 @@ export function SettingsView({ onRefreshSpending }: { onRefreshSpending?: () => 
             </div>
           )}
         </div>
+      </section>
+
+      {/* ─── Cost Audit ──────────────────────────────── */}
+      <section className="bg-[#0d0d0d] border border-[#1e1e1e] rounded-xl p-6 space-y-5">
+        <div className="flex items-center gap-2 flex-wrap">
+          <BarChart3 className="w-4 h-4 text-cyan-400 shrink-0" />
+          <h3 className="text-sm font-bold text-[#f0f0f0] uppercase tracking-[0.1em]">Cost Audit</h3>
+          <span className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded border uppercase tracking-wider text-cyan-300 bg-cyan-500/8 border-cyan-500/15">
+            {auditSummary.totalCalls} tracked calls
+          </span>
+        </div>
+
+        <p className="text-xs text-[#666]">
+          Deep per-call ledger for Gemini usage. This does not change agent prompts or make outputs lighter; it only attributes spend by feature, agent, and pass, and flags the patterns most likely to waste money.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          <div className="bg-[#111] rounded-lg p-3 space-y-1">
+            <p className="text-[#484848] uppercase tracking-[0.1em]">Tracked Spend</p>
+            <p className="text-[#f0f0f0] font-mono font-semibold">{formatCost(auditSummary.totalSpendEur)}</p>
+          </div>
+          <div className="bg-[#111] rounded-lg p-3 space-y-1">
+            <p className="text-[#484848] uppercase tracking-[0.1em]">Tracked Since</p>
+            <p className="text-[#f0f0f0] font-mono font-semibold text-[11px]">
+              {auditSummary.trackedSince ? new Date(auditSummary.trackedSince).toLocaleString('nl-NL') : 'No data yet'}
+            </p>
+          </div>
+          <div className="bg-[#111] rounded-lg p-3 space-y-1">
+            <p className="text-[#484848] uppercase tracking-[0.1em]">Reset Behavior</p>
+            <p className="text-[#f0f0f0] font-mono font-semibold text-[11px]">Spending reset also clears audit history</p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => refresh()}
+            className="px-3 py-2 bg-[#1a1a1a] hover:bg-[#222] text-[#aaa] rounded-lg text-xs font-medium transition-colors flex items-center gap-2"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Refresh Audit
+          </button>
+          <button
+            onClick={() => handleCopy(JSON.stringify(auditSummary, null, 2), 'audit')}
+            className="px-3 py-2 bg-[#1a1a1a] hover:bg-[#222] text-[#aaa] rounded-lg text-xs font-medium transition-colors flex items-center gap-2"
+          >
+            <Copy className="w-3.5 h-3.5" />
+            {copiedField === 'audit' ? 'Audit JSON Copied' : 'Copy Audit JSON'}
+          </button>
+        </div>
+
+        {auditSummary.totalCalls === 0 ? (
+          <div className="text-xs text-[#484848] bg-[#111] border border-[#1e1e1e] rounded-lg px-4 py-3">
+            No tracked API calls yet. Run discovery, deep research, brain enrichment, podcast extraction, or another Gemini flow to populate the audit.
+          </div>
+        ) : (
+          <div className="space-y-5">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <p className="text-[10px] text-[#484848] uppercase tracking-[0.1em]">Top Spend Buckets</p>
+                {auditSummary.topBuckets.map(bucket => (
+                  <div key={bucket.label} className="bg-[#111] border border-[#1e1e1e] rounded-lg px-4 py-3 text-xs space-y-1">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[#f0f0f0] font-semibold">{bucket.label}</span>
+                      <span className="text-cyan-300 font-mono">{formatCost(bucket.spendEur)}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-3 text-[#666] font-mono text-[11px]">
+                      <span>{bucket.calls} calls</span>
+                      <span>{bucket.groundingCalls} grounded</span>
+                      <span>{bucket.longContextCalls} long-context</span>
+                      <span>{Math.round(bucket.tokensIn / 1000)}k in</span>
+                      <span>{Math.round(bucket.tokensOut / 1000)}k out</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-[10px] text-[#484848] uppercase tracking-[0.1em]">Waste Flags</p>
+                {auditSummary.anomalies.length === 0 ? (
+                  <div className="bg-[#111] border border-[#1e1e1e] rounded-lg px-4 py-3 text-xs text-[#4ade80]">
+                    No major waste flags detected in the current ledger.
+                  </div>
+                ) : auditSummary.anomalies.map(anomaly => (
+                  <div key={anomaly.type} className="bg-[#111] border border-[#1e1e1e] rounded-lg px-4 py-3 text-xs space-y-1">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[#f0f0f0] font-semibold">{anomaly.label}</span>
+                      <span className="text-[#e05000] font-mono">{formatCost(anomaly.spendEur)}</span>
+                    </div>
+                    <p className="text-[#666] font-mono">{anomaly.calls} calls</p>
+                    <p className="text-[#666]">{anomaly.detail}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-[10px] text-[#484848] uppercase tracking-[0.1em]">Most Expensive Calls</p>
+              {auditSummary.topCalls.map(call => (
+                <div key={call.id} className="bg-[#111] border border-[#1e1e1e] rounded-lg px-4 py-3 text-xs space-y-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-[#f0f0f0] font-semibold">
+                      {call.agent ? `${call.feature} / ${call.agent}` : `${call.feature} / ${call.operation}`}
+                    </span>
+                    <span className="text-cyan-300 font-mono">{formatCost(call.costEur)}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-3 text-[#666] font-mono text-[11px]">
+                    <span>{call.tokensIn.toLocaleString()} in</span>
+                    <span>{call.tokensOut.toLocaleString()} out</span>
+                    <span>{call.groundingCalls} grounded</span>
+                    <span>{call.promptChars.toLocaleString()} chars prompt</span>
+                    <span>{call.responseChars.toLocaleString()} chars out</span>
+                  </div>
+                  <p className="text-[#484848]">
+                    {call.operation}
+                    {call.entityName ? ` · ${call.entityName}` : ''}
+                    {call.isLongContext ? ' · long-context tier' : ''}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
 
       {/* ─── Pricing reference ───────────────────────── */}

@@ -1,9 +1,11 @@
 import { useState, Fragment } from 'react';
 import { Category, Weights, CategoryStatus } from '../types';
 import { calculateDecisionScore, calculateLtvCac, cn, getMacroSector } from '../utils';
-import { LayoutGrid, List, Search, Ban, Trophy, Sparkles, Loader2, Square, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { LayoutGrid, List, Search, Ban, Trophy, Sparkles, Loader2, Square, AlertCircle, CheckCircle2, Clock, Wand2, X } from 'lucide-react';
 import { CategoryResearchState } from '../services/aiService';
 import { useResearchState } from '../lib/researchContext';
+import { getResearchStaleTtlMs } from '../lib/settings';
+import { parseNlQuery, applyParsedFilter, type ParsedFilter } from '../services/nlQueryService';
 
 interface Props {
   categories: Category[];
@@ -29,6 +31,33 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
   const [expandedMacros, setExpandedMacros] = useState<Record<string, boolean>>({});
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
+  // ── NL Smart Filter ─────────────────────────────────────────
+  const [nlInput, setNlInput] = useState('');
+  const [nlFilter, setNlFilter] = useState<ParsedFilter | null>(null);
+  const [nlStatus, setNlStatus] = useState<'idle' | 'parsing' | 'active' | 'error'>('idle');
+  const [showNlBar, setShowNlBar] = useState(false);
+  const [nlFilteredIds, setNlFilteredIds] = useState<string[] | null>(null);
+
+  const handleNlQuery = async () => {
+    if (!nlInput.trim() || nlStatus === 'parsing') return;
+    setNlStatus('parsing');
+    try {
+      const filter = await parseNlQuery(nlInput.trim());
+      setNlFilter(filter);
+      setNlStatus('active');
+    } catch {
+      setNlStatus('error');
+      setTimeout(() => setNlStatus('idle'), 3000);
+    }
+  };
+
+  const handleClearNl = () => {
+    setNlFilter(null);
+    setNlInput('');
+    setNlStatus('idle');
+    setNlFilteredIds(null);
+  };
+
   const getProgress = (id: string) => {
     const p = enhancingIds[id];
     if (!p || !p.agents) return 0;
@@ -53,6 +82,13 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
     return 'partial';
   };
 
+  /** Returns true if the category has research data but it's older than the configured TTL */
+  const isResearchStale = (c: Category): boolean => {
+    if (!c.lastUpdated || !c.agentResults?.unitEconomics) return false;
+    const ageDays = Date.now() - new Date(c.lastUpdated).getTime();
+    return ageDays > getResearchStaleTtlMs();
+  };
+
   const categoriesWithScores = categories
     .map(c => ({
       ...c,
@@ -62,6 +98,11 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
     .filter(c => {
       const matchSearch = c.name.toLowerCase().includes(search.toLowerCase()) || c.targetAudience.toLowerCase().includes(search.toLowerCase());
       const matchStatus = statusFilter === 'All' ? true : c.status === statusFilter;
+      // NL smart filter
+      if (nlFilter && nlStatus === 'active') {
+        const matchNl = applyParsedFilter([c], nlFilter).length > 0;
+        return matchSearch && matchStatus && matchNl;
+      }
       return matchSearch && matchStatus;
     })
     .sort((a, b) => b.score - a.score);
@@ -160,11 +201,51 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#333]" />
           <input 
             type="text" 
-            placeholder="Search..." 
+            placeholder="Search..."
             value={search}
             onChange={e => setSearch(e.target.value)}
             className="w-full bg-[#0d0d0d] border border-[#1a1a1a] text-[#e0e0e0] rounded-lg pl-8 pr-3 py-1.5 text-[13px] focus:outline-none focus:border-[#e05000]/40 transition-colors placeholder:text-[#2a2a2a]"
           />
+        </div>
+
+        {/* NL Smart Filter */}
+        {showNlBar ? (
+          <div className="w-full xl:flex-1 flex items-center gap-2">
+            <div className="relative flex-1">
+              <Wand2 className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#60a5fa]" />
+              <input
+                type="text"
+                placeholder='e.g. "CLV > €500, churn < 5%, easy acquisition"'
+                value={nlInput}
+                onChange={e => setNlInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleNlQuery()}
+                autoFocus
+                className="w-full bg-[#0c0c0c] border border-[#60a5fa]/30 text-[#e0e0e0] rounded-lg pl-8 pr-3 py-1.5 text-[13px] focus:outline-none focus:border-[#60a5fa]/60 transition-colors placeholder:text-[#2a2a2a]"
+                style={{boxShadow: '0 0 12px rgba(96,165,250,0.08)'}}
+              />
+            </div>
+            <button onClick={handleNlQuery} disabled={nlStatus === 'parsing'}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0"
+              style={{background:'rgba(96,165,250,0.1)', color:'#60a5fa', border:'1px solid rgba(96,165,250,0.25)'}}>
+              {nlStatus === 'parsing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Filter'}
+            </button>
+            {nlFilter && (
+              <button onClick={handleClearNl} className="p-1.5 text-[#444] hover:text-[#f87171] transition-colors shrink-0">
+                <X className="w-4 h-4" />
+              </button>
+            )}
+            <button onClick={() => { setShowNlBar(false); handleClearNl(); }} className="p-1.5 text-[#333] hover:text-[#666] transition-colors shrink-0">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ) : (
+          <button onClick={() => setShowNlBar(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0"
+            style={{background:'rgba(96,165,250,0.06)', color:'#60a5fa', border:'1px solid rgba(96,165,250,0.15)'}}>
+            <Wand2 className="w-3 h-3" />
+            <span className="hidden sm:inline">Smart Filter</span>
+          </button>
+        )}
         </div>
         <div className="flex flex-wrap items-center gap-4 w-full xl:w-auto xl:ml-auto">
           <select 
@@ -228,7 +309,20 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
             </button>
           </div>
         </div>
-      </div>
+
+      {/* NL filter active banner */}
+      {nlFilter && nlStatus === 'active' && (
+        <div className="shrink-0 flex items-center justify-between px-4 py-2 border-b text-xs" style={{background:'rgba(96,165,250,0.04)', borderColor:'rgba(96,165,250,0.12)', color:'#60a5fa'}}>
+          <div className="flex items-center gap-2">
+            <Wand2 className="w-3 h-3 shrink-0" />
+            <span className="font-medium">{nlFilter.explanation}</span>
+            <span className="font-mono text-[#60a5fa]/60">— {categoriesWithScores.length} matches</span>
+          </div>
+          <button onClick={handleClearNl} className="text-[#60a5fa]/60 hover:text-[#f87171] transition-colors font-medium">
+            Clear filter ×
+          </button>
+        </div>
+      )}
 
       {/* Bulk research progress banner — shown between controls and content for both view modes */}
       {(isBulkResearching || bulkStats) && (
@@ -371,15 +465,23 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
                     </span>
                     {(() => {
                       const ai = getAiResearchStatus(cat);
+                      const stale = ai === 'done' && isResearchStale(cat);
                       if (ai === 'none') return null;
                       return (
-                        <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[9px] uppercase font-bold tracking-wider ml-1',
-                          ai === 'done'    ? 'bg-[#4ade80]/08 text-[#4ade80] border border-[#4ade80]/15' :
-                          ai === 'partial' ? 'bg-[#d4ac0d]/08 text-[#d4ac0d] border border-[#d4ac0d]/15' :
-                                            'bg-[#f87171]/08 text-[#f87171] border border-[#f87171]/15'
-                        )} title={ai === 'done' ? 'All 10 AI agents completed' : ai === 'partial' ? 'Some agents completed, some failed or missing' : 'AI research failed'}>
-                          {ai === 'done' ? 'AI ✓' : ai === 'partial' ? 'AI ⚠' : 'AI ✗'}
-                        </span>
+                        <>
+                          <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[9px] uppercase font-bold tracking-wider ml-1',
+                            ai === 'done'    ? 'bg-[#4ade80]/08 text-[#4ade80] border border-[#4ade80]/15' :
+                            ai === 'partial' ? 'bg-[#d4ac0d]/08 text-[#d4ac0d] border border-[#d4ac0d]/15' :
+                                              'bg-[#f87171]/08 text-[#f87171] border border-[#f87171]/15'
+                          )} title={ai === 'done' ? 'All 10 AI agents completed' : ai === 'partial' ? 'Some agents completed, some failed or missing' : 'AI research failed'}>
+                            {ai === 'done' ? 'AI ✓' : ai === 'partial' ? 'AI ⚠' : 'AI ✗'}
+                          </span>
+                          {stale && (
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] uppercase font-bold tracking-wider ml-1 bg-[#facc15]/08 text-[#facc15] border border-[#facc15]/15" title="Research is older than your configured freshness threshold">
+                              <Clock className="w-2.5 h-2.5" /> Stale
+                            </span>
+                          )}
+                        </>
                       );
                     })()}
                     

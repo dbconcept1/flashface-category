@@ -217,7 +217,7 @@ export function ExportView({ categories }: Props) {
           </div>
           <h3 className="text-lg font-bold text-[#d0d0d0]">Live REST API</h3>
           <p className="text-sm text-[#484848]">
-            Your data is available as a live JSON endpoint — any external tool, script, Zapier/Make.com automation, or AI can pull the full category database at any time.
+            Raw dev endpoint for the category database only. Useful for scripts and automations. For ChatGPT.com Actions, use the secured connector in Settings → ChatGPT Actions API instead of this unauthenticated route.
           </p>
           <div className="bg-[#111] border border-[#1e1e1e] rounded-xl px-4 py-3 font-mono text-xs text-[#4ade80] break-all">
             GET {API_URL}

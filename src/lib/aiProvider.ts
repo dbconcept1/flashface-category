@@ -25,7 +25,7 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import { getApiKey, getOpenAiApiKey, recordApiUsage, checkBudget } from './settings';
+import { getApiKey, getOpenAiApiKey, recordGeminiUsageFromResponse, checkBudget } from './settings';
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
@@ -141,7 +141,7 @@ function createGeminiAdapter(): AIProviderAdapter {
       const totalUsage: UsageStats = { tokensIn: 0, tokensOut: 0, groundingCalls: 0 };
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const call = async (contents: string, config: Record<string, unknown>): Promise<string> => {
+      const call = async (contents: string, config: Record<string, unknown>, operation: string): Promise<string> => {
         checkBudget();
         const resp = await withRetry(() => ai.models.generateContent({ model: MODEL, contents, config }));
         const meta = (resp as any).usageMetadata;
@@ -153,7 +153,11 @@ function createGeminiAdapter(): AIProviderAdapter {
         totalUsage.tokensIn += tIn;
         totalUsage.tokensOut += tOut;
         totalUsage.groundingCalls += gCalls;
-        recordApiUsage(tIn, tOut, gCalls);
+        recordGeminiUsageFromResponse({ model: MODEL, contents, config }, resp, {
+          feature: 'ai-provider',
+          operation,
+          entityType: 'completion',
+        });
         return (resp as any).text?.trim() ?? '';
       };
 
@@ -161,19 +165,19 @@ function createGeminiAdapter(): AIProviderAdapter {
 
       if (req.useSearch && req.jsonSchema) {
         // Two-pass: grounded search → raw text, then raw text → structured JSON
-        const raw = await call(full, { tools: [{ googleSearch: {} }] });
+        const raw = await call(full, { tools: [{ googleSearch: {} }] }, 'grounded-search');
         const extractPrompt = req.jsonHint
           ? `${req.jsonHint}\n\n---RESEARCH START---\n${raw.slice(0, 30000)}\n---RESEARCH END---`
           : `Extract structured data from this research:\n\n${raw.slice(0, 30000)}`;
         const json = await call(extractPrompt, {
           responseMimeType: 'application/json',
           responseSchema: toGeminiSchema(req.jsonSchema),
-        });
+        }, 'json-extraction');
         return { text: json, usage: totalUsage };
       }
 
       if (req.useSearch) {
-        return { text: await call(full, { tools: [{ googleSearch: {} }] }), usage: totalUsage };
+        return { text: await call(full, { tools: [{ googleSearch: {} }] }, 'grounded-search'), usage: totalUsage };
       }
 
       if (req.jsonSchema) {
@@ -181,12 +185,12 @@ function createGeminiAdapter(): AIProviderAdapter {
           text: await call(full, {
             responseMimeType: 'application/json',
             responseSchema: toGeminiSchema(req.jsonSchema),
-          }),
+          }, 'json-completion'),
           usage: totalUsage,
         };
       }
 
-      return { text: await call(full, {}), usage: totalUsage };
+      return { text: await call(full, {}, 'plain-completion'), usage: totalUsage };
     },
   };
 }

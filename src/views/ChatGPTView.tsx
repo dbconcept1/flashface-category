@@ -335,6 +335,9 @@ function SetupPanel({ categories, weights, maxClv }: { categories: Category[]; w
           <p className="text-xs text-[#484848]">
             If you use <span className="text-[#aaa]">chatgpt.com</span> Custom GPTs, do this once to configure it, then paste session data each conversation.
           </p>
+          <div className="bg-cyan-500/5 border border-cyan-500/15 rounded-xl px-4 py-3 text-[11px] text-[#666]">
+            Want live pull instead of copy-paste? Use <span className="text-cyan-300 font-semibold">Settings → ChatGPT Actions API</span> to generate a bearer token and import the OpenAPI schema into your GPT.
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="bg-[#111] border border-[#1e1e1e] rounded-xl p-4 space-y-3">
               <div>

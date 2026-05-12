@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../utils';
 import { compileBrain, estimateBrainTokens } from '../lib/brainCompiler';
-import { getApiKey } from '../lib/settings';
+import { getApiKey, checkBudget, recordGeminiUsageFromResponse } from '../lib/settings';
 import { GoogleGenAI } from '@google/genai';
 
 // ─── Type config ──────────────────────────────────────────────────────────────
@@ -86,6 +86,7 @@ async function extractBrainEntryFromImage(
 ): Promise<Partial<Omit<BrainEntry, 'id' | 'createdAt' | 'updatedAt'>>> {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('Gemini API key not configured in Settings.');
+  checkBudget();
 
   const ai = new GoogleGenAI({ apiKey });
   const prompt = `You are a knowledge extraction AI. The user has shared a screenshot or image they want to save as a brain entry in their personal knowledge OS.
@@ -106,7 +107,7 @@ Return ONLY valid JSON with these exact keys:
   "tags": ["tag1", "tag2"]
 }`;
 
-  const response = await ai.models.generateContent({
+  const params = {
     model: 'gemini-2.5-flash',
     contents: [
       { parts: [
@@ -114,6 +115,13 @@ Return ONLY valid JSON with these exact keys:
         { inlineData: { data: base64Data, mimeType } },
       ]},
     ],
+  };
+
+  const response = await ai.models.generateContent(params);
+  recordGeminiUsageFromResponse(params, response, {
+    feature: 'brain-os',
+    operation: 'extract-from-image',
+    entityType: 'brain-entry',
   });
 
   const raw = response.text?.trim() || '{}';
@@ -143,6 +151,7 @@ async function enrichBrainEntryWithSearch(
 ): Promise<{ sources: string[]; summary: string }> {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('Gemini API key not configured in Settings.');
+  checkBudget();
 
   const ai = new GoogleGenAI({ apiKey });
   const prompt = `Research and verify the following knowledge claim. Find real sources that either confirm or challenge it.
@@ -154,10 +163,17 @@ ${entry.source ? `Claimed source: "${entry.source}"` : ''}
 Provide a concise 2-3 sentence assessment: is this verifiable? What is the consensus? Then cite specific sources found.`;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const response = await (ai.models as any).generateContent({
+  const params = {
     model: 'gemini-2.5-flash',
     contents: prompt,
     config: { tools: [{ googleSearch: {} }] },
+  };
+  const response = await (ai.models as any).generateContent(params);
+  recordGeminiUsageFromResponse(params, response, {
+    feature: 'brain-os',
+    operation: 'search-enrichment',
+    entityType: 'brain-entry',
+    entityName: entry.title,
   });
 
   // Extract grounding source URLs from the response metadata

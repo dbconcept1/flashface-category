@@ -146,6 +146,8 @@ export interface TrackedBrand {
   aiSummary?: string;
   /** Set when user promotes this brand to a Category entry. */
   linkedCategoryId?: string;
+  /** ID of a CompanyProfile in this app linked to this brand. */
+  linkedCompanyId?: string;
   /** When true, a weekly auto-research run is triggered on app load if overdue. */
   scheduledUpdate?: boolean;
   /** ISO timestamp of last completed AI research run. */
@@ -266,6 +268,8 @@ export interface FounderPodcast {
   description?: string;
   createdAt: string;
   lastScanned?: string;
+  /** ID of a FounderProfile in this app linked to this podcast founder. */
+  linkedFounderProfileId?: string;
 }
 
 /**

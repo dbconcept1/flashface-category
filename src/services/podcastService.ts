@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import type { FounderPodcast, PodcastEpisode } from "../types";
-import { getApiKey, checkBudget, recordApiUsage } from "../lib/settings";
+import { getApiKey, checkBudget, recordGeminiUsageFromResponse } from "../lib/settings";
 
 async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
   let lastError: unknown;
@@ -45,12 +45,15 @@ export async function discoverFounderEpisodes(
   const modelName = "gemini-2.5-flash";
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const safeGenerate = async (params: any) => {
+  const safeGenerate = async (params: any, operation: string) => {
     checkBudget();
     const response = await retryWithBackoff(() => ai.models.generateContent(params));
-    const meta = (response as any).usageMetadata;
-    const hasGrounding = Array.isArray(params.config?.tools) && params.config.tools.some((t: any) => 'googleSearch' in t);
-    recordApiUsage(meta?.promptTokenCount ?? 0, meta?.candidatesTokenCount ?? 0, hasGrounding ? 1 : 0);
+    recordGeminiUsageFromResponse(params, response, {
+      feature: 'podcast-intel',
+      operation,
+      entityType: 'founder',
+      entityName: founder.founderName,
+    });
     return response;
   };
 
@@ -75,31 +78,47 @@ export async function discoverFounderEpisodes(
 
   onStatus(`Searching YouTube for latest episodes from ${founder.founderName}...`);
 
-  const response = await safeGenerate({
+  // Pass 1: grounded search — raw text only (cannot combine schema + search in one call)
+  const searchResponse = await safeGenerate({
     model: modelName,
-    contents: `Find the 6 most recent YouTube podcast episodes featuring or hosted by: "${founder.founderName}".
-Channel/search hint: ${founder.channelQuery}
+    contents: `Search for the 6 most recent YouTube podcast episodes featuring or hosted by: "${founder.founderName}".
+Channel / search hint: ${founder.channelQuery}
 
-MANDATORY SEARCHES — run all of these:
-1. site:youtube.com "${founder.founderName}" podcast 2025 2026
+Run ALL of these searches and list every episode you find:
+1. site:youtube.com "${founder.founderName}" podcast 2025
 2. "${founder.founderName}" "${founder.channelQuery}" youtube latest episode
-3. youtube.com "${founder.founderName}" interview DTC ecommerce subscription
-4. "${founder.founderName}" podcast episode youtube 2024 2025
+3. "${founder.founderName}" podcast DTC ecommerce interview 2024 2025
 
-RETURN RULES:
-- Only include videos where this specific person appears (guest or host)
-- Return full youtube.com/watch?v=... URLs ONLY — no shorts, no playlists
-- ANTI-HALLUCINATION: only include URLs you actually retrieved from search. Never construct or guess video IDs.
-- Sort by newest first`,
+For each episode, write:
+- Title: <exact YouTube title>
+- URL: <full https://www.youtube.com/watch?v=VIDEO_ID>
+- Date: <approximate publish date>
+
+Rules: real watch URLs only (no /shorts/, no playlists). Never guess or create video IDs.`,
+    config: {
+      tools: [{ googleSearch: {} }],
+    }
+  }, 'discover-episodes-grounded-search');
+
+  const rawSearchText = searchResponse.text?.trim() || '';
+  onStatus(`Extracting episode list...`);
+
+  // Pass 2: JSON extraction from raw search text
+  const extractResponse = await safeGenerate({
+    model: modelName,
+    contents: `Extract YouTube podcast episodes from the search results below.
+Only include episodes where "${founder.founderName}" actually appears (as guest or host).
+Only include standard youtube.com/watch?v=... URLs.
+
+SEARCH RESULTS:
+${rawSearchText.slice(0, 25000)}`,
     config: {
       responseMimeType: "application/json",
       responseSchema: episodeSchema,
-      tools: [{ googleSearch: {} }],
-      toolConfig: { includeServerSideToolInvocations: true }
     }
-  });
+  }, 'discover-episodes-json-extraction');
 
-  const data = JSON.parse(response.text?.trim() || '{}');
+  const data = JSON.parse(extractResponse.text?.trim() || '{}');
   const results: DiscoveredEpisode[] = [];
 
   for (const ep of (data.episodes || [])) {
@@ -150,12 +169,15 @@ export async function extractEpisodeInsights(
   const modelName = "gemini-2.5-flash";
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const safeGenerate = async (params: any) => {
+  const safeGenerate = async (params: any, operation: string) => {
     checkBudget();
     const response = await retryWithBackoff(() => ai.models.generateContent(params));
-    const meta = (response as any).usageMetadata;
-    const hasGrounding = Array.isArray(params.config?.tools) && params.config.tools.some((t: any) => 'googleSearch' in t);
-    recordApiUsage(meta?.promptTokenCount ?? 0, meta?.candidatesTokenCount ?? 0, hasGrounding ? 1 : 0);
+    recordGeminiUsageFromResponse(params, response, {
+      feature: 'podcast-intel',
+      operation,
+      entityType: 'podcast-episode',
+      entityName: episode.title,
+    });
     return response;
   };
 
@@ -224,7 +246,7 @@ Be specific. Capture exact quotes where impactful. This goes into a permanent bu
         responseMimeType: "application/json",
         responseSchema: insightSchema,
       }
-    });
+    }, 'extract-insights-video');
 
     const data = JSON.parse(response.text?.trim() || '{}');
     onStatus('Extraction complete.');
@@ -244,29 +266,39 @@ Be specific. Capture exact quotes where impactful. This goes into a permanent bu
     // show notes, transcript snippets, published summaries, and extract from those.
     onStatus(`Direct video processing unavailable. Using search-based fallback...`);
 
-    const fallbackResponse = await safeGenerate({
+    // Fallback Pass 1: search for episode content
+    const fallbackSearch = await safeGenerate({
       model: modelName,
-      contents: `Find and analyze this DTC podcast episode. Extract business intelligence.
+      contents: `Find and summarize this DTC podcast episode.
 
 Episode: "${episode.title}" by ${episode.founderName}
 YouTube: ${episode.youtubeUrl}
 
-SEARCHES TO RUN:
+Search for:
 1. "${episode.founderName}" "${episode.title}" transcript OR "show notes"
 2. "${episode.founderName}" "${episode.title.slice(0, 40)}" key takeaways
-3. site:youtube.com "${episode.youtubeUrl}" description transcript
-4. "${episode.founderName}" podcast business tactics ecommerce DTC
+3. "${episode.founderName}" podcast business tactics DTC ecommerce
 
-${extractionPrompt}
+${extractionPrompt}`,
+      config: {
+        tools: [{ googleSearch: {} }],
+      }
+    }, 'extract-insights-fallback-grounded-search');
 
-Note: "Video processed via search fallback — ${videoErr.message?.slice(0, 80)}"`,
+    const fallbackRaw = fallbackSearch.text?.trim() || '';
+
+    // Fallback Pass 2: extract structured JSON
+    const fallbackResponse = await safeGenerate({
+      model: modelName,
+      contents: `Extract the DTC business intelligence from the research below.
+
+RESEARCH:
+${fallbackRaw.slice(0, 25000)}`,
       config: {
         responseMimeType: "application/json",
         responseSchema: insightSchema,
-        tools: [{ googleSearch: {} }],
-        toolConfig: { includeServerSideToolInvocations: true }
       }
-    });
+    }, 'extract-insights-fallback-json');
 
     const data = JSON.parse(fallbackResponse.text?.trim() || '{}');
     onStatus('Extraction complete (search fallback).');

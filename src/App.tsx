@@ -25,6 +25,7 @@ import { IdeasView } from './views/IdeasView';
 import type { IntelNote, FinanceScenario, TrackedBrand, CompanyProfile, Idea, FounderPodcast, PodcastEpisode, BrainEntry, BrainConversation } from './types';
 import { loadBestBrain, saveBrainAllLayers } from './lib/brainDb';
 import { loadBestConversations, saveConversationsAllLayers } from './lib/conversationDb';
+import { syncChatGptConnectorExtras } from './lib/chatgptConnector';
 import { enrichNote } from './services/intelService';
 import { researchBrand } from './services/brandService';
 import type { BrandInput } from './services/brandService';
@@ -118,6 +119,7 @@ export default function App() {
   });
   const [scanningFounderId, setScanningFounderId] = useState<string | null>(null);
   const [extractingEpisodeIds, setExtractingEpisodeIds] = useState<string[]>([]);
+  const [podcastScanErrors, setPodcastScanErrors] = useState<Record<string, string>>({});
 
   // ── Brain: 3-layer init + persist ───────────────────────────────────────────
   const hasLoadedBrainRef = useRef(false);
@@ -157,6 +159,23 @@ export default function App() {
   useEffect(() => { localStorage.setItem('flashface_founders', JSON.stringify(founders)); }, [founders]);
   useEffect(() => { localStorage.setItem('flashface_podcasts', JSON.stringify(founderPodcasts)); }, [founderPodcasts]);
   useEffect(() => { localStorage.setItem('flashface_podcast_episodes', JSON.stringify(podcastEpisodes)); }, [podcastEpisodes]);
+
+  // Browser-only datasets are mirrored to the ChatGPT connector so Actions can
+  // read the same operational state as the live app.
+  useEffect(() => {
+    syncChatGptConnectorExtras({
+      intelNotes,
+      financeScenarios,
+      trackedBrands,
+      companyProfiles,
+      ideas,
+      founders,
+      founderPodcasts,
+      podcastEpisodes,
+    }).catch((error) => {
+      console.warn('[ChatGPT Connector] Extras sync failed', error);
+    });
+  }, [intelNotes, financeScenarios, trackedBrands, companyProfiles, ideas, founders, founderPodcasts, podcastEpisodes]);
 
   const handleAddBrainEntry   = (e: BrainEntry) => setBrainEntries(prev => [e, ...prev]);
   const handleUpdateBrainEntry = (e: BrainEntry) => setBrainEntries(prev => prev.map(x => x.id === e.id ? e : x));
@@ -257,6 +276,8 @@ export default function App() {
   const handleScanFounder = async (founder: FounderPodcast) => {
     if (scanningFounderId) return;
     setScanningFounderId(founder.id);
+    // clear previous error for this founder
+    setPodcastScanErrors(prev => { const n = { ...prev }; delete n[founder.id]; return n; });
     try {
       const existingUrls = new Set(podcastEpisodes.filter(e => e.founderId === founder.id).map(e => e.youtubeUrl));
       const found = await discoverFounderEpisodes(founder, existingUrls, () => {});
@@ -271,7 +292,7 @@ export default function App() {
       }
       setFounderPodcasts(prev => prev.map(f => f.id === founder.id ? { ...f, lastScanned: new Date().toISOString() } : f));
     } catch (e: any) {
-      alert(`Scan failed: ${e.message}`);
+      setPodcastScanErrors(prev => ({ ...prev, [founder.id]: e.message || 'Scan failed' }));
     } finally {
       setScanningFounderId(null);
     }
@@ -312,6 +333,62 @@ export default function App() {
     };
     handleAddNote(note);
     alert(`Saved to Intel Brain: "${note.title}"`);
+  };
+
+  /**
+   * Create (or navigate to) a FounderProfile linked to a podcast founder.
+   * If the podcast entry already has a linked profile, just navigate there.
+   */
+  const handleLinkPodcastToFounderProfile = (founder: FounderPodcast) => {
+    if (founder.linkedFounderProfileId) {
+      setCurrentView('founders');
+      return;
+    }
+    const now = new Date().toISOString();
+    const newProfile: FounderProfile = {
+      id: crypto.randomUUID(),
+      name: founder.founderName,
+      notes: `Added from Podcast Intel.\nTracked channel: ${founder.channelQuery}${founder.description ? `\n\n${founder.description}` : ''}`,
+      pastCompanies: [],
+      keyInsights: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    setFounders(prev => [...prev, newProfile]);
+    setFounderPodcasts(prev => prev.map(f =>
+      f.id === founder.id ? { ...f, linkedFounderProfileId: newProfile.id } : f
+    ));
+    setCurrentView('founders');
+  };
+
+  /**
+   * Create (or navigate to) a CompanyProfile linked to a tracked brand.
+   * If the brand already has a linked company, just navigate there.
+   */
+  const handleLinkBrandToCompany = (brandId: string) => {
+    const brand = trackedBrands.find(b => b.id === brandId);
+    if (!brand) return;
+    if (brand.linkedCompanyId) {
+      setCurrentView('companies');
+      return;
+    }
+    const now = new Date().toISOString();
+    const newProfile: CompanyProfile = {
+      id: crypto.randomUUID(),
+      name: brand.name,
+      url: brand.url,
+      industry: brand.detectedIndustry,
+      description: brand.coreInsight || brand.userDescription,
+      entries: [],
+      linkedBrandId: brand.id,
+      createdAt: now,
+      updatedAt: now,
+    };
+    setCompanyProfiles(prev => [...prev, newProfile]);
+    setTrackedBrands(prev => prev.map(b =>
+      b.id === brandId ? { ...b, linkedCompanyId: newProfile.id } : b
+    ));
+    setCurrentView('companies');
   };
 
   const [isMainSidebarOpen, setIsMainSidebarOpen] = useState(true);
@@ -770,10 +847,20 @@ export default function App() {
           "bg-[#080808] border-r border-[#1a1a1a] flex flex-col z-50 transition-all duration-200 relative",
           isMainSidebarOpen ? "w-64" : "w-0 overflow-hidden border-none"
         )}>
-          <div className="h-12 flex items-center px-5 border-b border-[#1a1a1a] w-64 shrink-0 justify-between">
-            <span className="font-extrabold tracking-[0.1em] text-[15px] leading-none">
-              <span className="text-[#e05000]">FLASH</span><span className="text-[#f0f0f0]">FACE</span>
-            </span>
+          <div className="h-12 flex items-center px-4 border-b border-[#181818] w-64 shrink-0 justify-between">
+            <div className="flex items-center gap-2.5">
+              {/* Logomark */}
+              <div className="w-6 h-6 rounded-md bg-[#e65200] flex items-center justify-center shrink-0" style={{boxShadow:'0 0 10px rgba(230,82,0,0.4)'}}>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M2 10V4l4-2 4 2v6l-4 2-4-2z" fill="white" fillOpacity="0.9"/>
+                  <path d="M6 2v10M2 4l4 2 4-2" stroke="white" strokeWidth="0.5" strokeOpacity="0.4"/>
+                </svg>
+              </div>
+              <span className="font-black tracking-[-0.02em] text-[14px] leading-none">
+                <span className="text-[#e65200]">Flash</span><span className="text-[#efefef]">Face</span>
+                <span className="ml-1.5 text-[9px] font-semibold tracking-widest uppercase text-[#2e2e2e] align-middle">OS</span>
+              </span>
+            </div>
           </div>
 
           <nav className="flex-1 py-3 px-2.5 w-64 shrink-0 overflow-y-auto space-y-4">
@@ -906,11 +993,31 @@ export default function App() {
 
           </nav>
 
-          <div className="p-3 border-t border-[#1a1a1a] w-64 shrink-0">
+          <div className="p-3 border-t border-[#181818] w-64 shrink-0 space-y-2">
+            {/* Budget micro-bar */}
+            {(() => {
+              const s = getSettings();
+              void spendingRefresh;
+              if (s.spendingEur === 0 && s.budgetLimitEur === null) return null;
+              const pct = calcBudgetPercent(s);
+              const color = pct >= 90 ? '#f87171' : pct >= 70 ? '#e65200' : '#4ade80';
+              return (
+                <button onClick={() => setCurrentView('settings')} className="w-full group" title={`€${s.spendingEur.toFixed(3)} spent${s.budgetLimitEur ? ` / €${s.budgetLimitEur} budget` : ''}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] uppercase tracking-[0.12em] font-semibold" style={{color: s.spendingEur > 0.001 ? color : '#333'}}>API Budget</span>
+                    <span className="text-[10px] font-mono" style={{color: s.spendingEur > 0.001 ? color : '#333'}}>€{s.spendingEur.toFixed(2)}{s.budgetLimitEur ? `/${s.budgetLimitEur}` : ''}</span>
+                  </div>
+                  <div className="h-[2px] w-full bg-[#181818] rounded-full overflow-hidden">
+                    <div className="h-full rounded-full transition-all duration-500" style={{width:`${Math.min(100,pct)}%`, background: color}}></div>
+                  </div>
+                </button>
+              );
+            })()}
             {['categories', 'comparison', 'discovery', 'dashboard'].includes(currentView) ? (
               <button
                 onClick={() => openEditor(null)}
-                className="w-full flex items-center justify-center gap-2 py-2.5 bg-[#e05000] hover:bg-[#c74800] text-[#f0f0f0] rounded-lg text-sm font-semibold transition-colors"
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all duration-150"
+                style={{background:'linear-gradient(135deg,#e65200 0%,#cc4900 100%)', color:'#fff', boxShadow:'0 2px 12px rgba(230,82,0,0.3)'}}
               >
                 <Plus className="w-4 h-4" />
                 New Category
@@ -1119,7 +1226,7 @@ export default function App() {
             {currentView === 'chatgpt' && <ChatGPTView categories={categories} weights={weights} maxClv={maxClv} brainEntries={brainEntries} conversations={conversations} onGoToSettings={() => setCurrentView('settings')} onGoToBrain={() => setCurrentView('brain')} onSaveConversation={handleSaveConversation} onSaveToBrain={handleSaveToBrain} />}
             {currentView === 'brain' && <BrainView entries={brainEntries} onAdd={handleAddBrainEntry} onUpdate={handleUpdateBrainEntry} onDelete={handleDeleteBrainEntry} prefillContent={prefillBrainContent} onClearPrefill={() => setPrefillBrainContent(null)} />}
             {currentView === 'intel' && <IntelView notes={intelNotes} onAdd={handleAddNote} onDelete={handleDeleteNote} onEnrich={handleEnrichNote} />}
-            {currentView === 'brands' && <BrandTrackerView brands={trackedBrands} onAdd={handleAddBrand} onDelete={(id) => setTrackedBrands(prev => prev.filter(b => b.id !== id))} onRetry={handleRetryBrand} onAddToCategories={handleAddBrandToCategories} onToggleSchedule={handleToggleBrandSchedule} categories={categories} />}
+            {currentView === 'brands' && <BrandTrackerView brands={trackedBrands} onAdd={handleAddBrand} onDelete={(id) => setTrackedBrands(prev => prev.filter(b => b.id !== id))} onRetry={handleRetryBrand} onAddToCategories={handleAddBrandToCategories} onToggleSchedule={handleToggleBrandSchedule} categories={categories} companies={companyProfiles} onLinkToCompany={handleLinkBrandToCompany} />}
             {currentView === 'companies' && <CompanyProfilesView profiles={companyProfiles} onChange={setCompanyProfiles} />}
             {currentView === 'ideas' && <IdeasView ideas={ideas} onAdd={(idea) => setIdeas(prev => [idea, ...prev])} onUpdate={(idea) => setIdeas(prev => prev.map(i => i.id === idea.id ? idea : i))} onDelete={(id) => setIdeas(prev => prev.filter(i => i.id !== id))} />}
             {currentView === 'founders' && <FoundersView founders={founders} companies={companyProfiles} onChange={setFounders} />}
@@ -1129,12 +1236,15 @@ export default function App() {
                 episodes={podcastEpisodes}
                 scanningFounderId={scanningFounderId}
                 extractingEpisodeIds={extractingEpisodeIds}
+                founderProfiles={founders}
+                scanErrors={podcastScanErrors}
                 onAddFounder={handleAddFounder}
                 onDeleteFounder={handleDeleteFounder}
                 onScanFounder={handleScanFounder}
                 onExtractEpisode={handleExtractEpisode}
                 onDeleteEpisode={handleDeleteEpisode}
                 onSendToIntelBrain={handleSendEpisodeToIntelBrain}
+                onLinkToFounderProfile={handleLinkPodcastToFounderProfile}
               />
             )}
             {currentView === 'finance' && <FinanceView scenarios={financeScenarios} onAdd={handleAddScenario} onDelete={handleDeleteScenario} />}
@@ -1171,7 +1281,7 @@ export default function App() {
 function NavSection({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="space-y-0.5">
-      <p className="px-2 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#333]">{label}</p>
+      <p className="px-2.5 pt-1 pb-1.5 text-[9.5px] font-bold uppercase tracking-[0.18em] text-[#2a2a2a]">{label}</p>
       {children}
     </div>
   );
@@ -1190,20 +1300,27 @@ function NavItem({
     <button
       onClick={onClick}
       className={cn(
-        "w-full flex items-center justify-between px-2.5 py-[6px] text-[13px] transition-colors duration-100 rounded-md group border-l-[2px]",
+        "w-full flex items-center justify-between px-2.5 py-[7px] text-[12.5px] transition-all duration-100 rounded-lg group relative overflow-hidden",
         active
-          ? 'border-l-[#e05000] text-[#f0f0f0] bg-[#141414]'
-          : 'border-l-transparent text-[#5a5a5a] hover:text-[#b0b0b0] hover:bg-[#0f0f0f]'
+          ? 'text-[#efefef] bg-[#161616]'
+          : 'text-[#484848] hover:text-[#aaaaaa] hover:bg-[#0f0f0f]'
       )}
     >
-      <span className="flex items-center gap-2.5">
-        <span className={cn("transition-colors shrink-0", active ? "text-[#e05000]" : "text-[#3a3a3a] group-hover:text-[#666]")}>
+      {/* Active accent bar */}
+      {active && (
+        <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[2px] h-4 rounded-r-full bg-[#e65200]" style={{boxShadow:'0 0 6px rgba(230,82,0,0.6)'}} />
+      )}
+      <span className="flex items-center gap-2.5 pl-0.5">
+        <span className={cn("transition-colors shrink-0", active ? "text-[#e65200]" : "text-[#303030] group-hover:text-[#555]")}>
           {icon}
         </span>
         <span className="font-medium leading-none">{label}</span>
       </span>
       {badge !== undefined && (
-        <span className="text-[10px] font-mono bg-[#1a1a1a] text-[#484848] px-1.5 py-0.5 rounded">{badge}</span>
+        <span className={cn(
+          "text-[9px] font-mono px-1.5 py-0.5 rounded",
+          active ? "bg-[#e65200]/15 text-[#e65200]" : "bg-[#161616] text-[#383838]"
+        )}>{badge}</span>
       )}
     </button>
   );
@@ -1214,7 +1331,7 @@ function WeightSlider({ name, value, min, max, onChange }: { name: string, value
     <div>
       <div className="flex justify-between text-xs mb-1.5">
         <span className="text-[#555] uppercase tracking-[0.1em] text-[10px] font-medium">{name}</span>
-        <span className="text-[#e05000] font-mono text-[11px]">{value}%</span>
+        <span className="text-[#e65200] font-mono text-[11px]">{value}%</span>
       </div>
       <input 
         type="range" 
@@ -1222,7 +1339,7 @@ function WeightSlider({ name, value, min, max, onChange }: { name: string, value
         max={max} 
         value={value} 
         onChange={e => onChange(parseInt(e.target.value))}
-        className="w-full accent-[#e05000] h-1 bg-[#1e1e1e] rounded-lg appearance-none cursor-pointer"
+        className="w-full accent-[#e65200] h-1 bg-[#1e1e1e] rounded-lg appearance-none cursor-pointer"
         style={{ boxShadow: 'none' }}
       />
     </div>
