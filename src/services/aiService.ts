@@ -562,9 +562,12 @@ export async function discoverDtcCategories(
 
   while (!signal.aborted) {
     const existingCategoryNames = getExistingCategoryNames();
-    // Cap the avoid-list at 60 names to prevent context bloat as DB grows.
-    // The model already avoids exact names — truncating to recent entries is fine.
-    const avoidNames = existingCategoryNames.slice(-60);
+    // Pass ALL existing names to the model — category names are short strings (~30 chars each)
+    // so even 500 names is only ~15KB, trivial vs. the 1M-token context window.
+    // Capping at 60 (old behaviour) caused the primary bug: the model re-discovered
+    // older categories not in the avoid list, and handleImport correctly deduped them
+    // → 0 net additions per cycle after the first ~60 categories were found.
+    const avoidNames = existingCategoryNames;
     log(`Syncing bounds: avoiding ${existingCategoryNames.length} known categories & ${searchedSectors.size} exhausted sectors.`);
 
     // ── Step 1: Generate next wave of sectors via grounded JSON ──────────────
@@ -574,29 +577,54 @@ export async function discoverDtcCategories(
 
     let sectors: string[] = [];
     try {
+      // Cap to last 40 to prevent the prompt from ballooning as the set grows
+      // into hundreds of entries and confusing the model on subsequent cycles.
       const avoidedSectorsText = searchedSectors.size > 0
-        ? `DO NOT SUGGEST THESE SECTORS (already mapped): ${Array.from(searchedSectors).join(", ")}.`
+        ? `DO NOT SUGGEST THESE SECTORS (already mapped): ${Array.from(searchedSectors).slice(-40).join(", ")}.`
         : "";
 
-      const sectorResp = await safeGenerate({
+      // Pass 1 — grounded text search: confirm real DTC businesses per sector.
+      // NOTE: responseMimeType + responseSchema are INCOMPATIBLE with googleSearch
+      // in a single call. We must do two separate calls.
+      const sectorRawResp = await safeGenerate({
         model: modelName,
-        contents: `You are an endless private-equity sector mapper. Use Google Search to verify each sector has real, operating DTC subscription businesses before listing it.
+        contents: `You are an endless private-equity sector mapper. Search the web to verify each sector has real, operating DTC subscription businesses before listing it.
 
-Return exactly 8 DISTINCT consumer product sectors where subscription/high-loyalty DTC models are viable and proven.
+Research and describe 8 DISTINCT consumer product sectors where subscription/high-loyalty DTC models are viable and proven.
 VARIETY RULE: Rotate across drastically different areas — Beauty, Pet care, Baby products, Vitamins/supplements, Home goods, Wearables, Coffee/food, Skincare, Fitness, Men's grooming, Women's health, Gaming accessories, Office products, Cleaning products, Sleep aids, Oral care, Kids education, Hobby crafts — never cluster in one theme.
 ${avoidedSectorsText}
 
-Return the sector names as a JSON array under "sectors". Each sector must have at least one real, named DTC business confirmed by search.`,
+For each sector provide: the sector name, and at least one real named DTC business currently operating in it. Use plain text, no JSON.`,
         config: {
-          responseMimeType: "application/json",
-          responseSchema: sectorSchema,
-          tools: [{ googleSearch: {} }],
-          toolConfig: { includeServerSideToolInvocations: true }
+          tools: [{ googleSearch: {} }]
         }
       });
       if (signal.aborted) return;
 
-      sectors = JSON.parse(sectorResp.text?.trim() || '{}').sectors || [];
+      const sectorRawText = sectorRawResp.text?.trim() || '';
+      log(`Sector research complete. Extracting structured list...`);
+
+      // Pass 2 — JSON extraction from the grounded text (no search tools).
+      const sectorExtractResp = await safeGenerate({
+        model: modelName,
+        contents: `From the following research text, extract exactly 8 distinct consumer sector names and return them as JSON with a "sectors" array of strings. Only the sector name — no descriptions.\n\nResearch:\n${sectorRawText.slice(0, 20000)}`,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: sectorSchema
+        }
+      });
+      if (signal.aborted) return;
+
+      sectors = JSON.parse(sectorExtractResp.text?.trim() || '{}').sectors || [];
+      // Guard: remove any sectors the model returned despite the avoid instruction.
+      // Without this, the model can loop forever on the same 8 sectors while
+      // handleImport correctly deduplicates every discovery → 0 net additions.
+      const alreadySearched = Array.from(searchedSectors).map(s => s.toLowerCase());
+      const freshSectors = sectors.filter((s: string) => !alreadySearched.includes(s.toLowerCase()));
+      if (freshSectors.length < sectors.length) {
+        log(`Filtered ${sectors.length - freshSectors.length} already-searched sectors returned by model.`);
+      }
+      sectors = freshSectors;
       log(`Mapped ${sectors.length} new sectors via grounded search.`);
       updateProgress({ totalIndustries: progress.totalIndustries + sectors.length });
     } catch (e: any) {
@@ -606,7 +634,16 @@ Return the sector names as a JSON array under "sectors". Each sector must have a
     }
 
     if (!sectors || sectors.length === 0) {
-      log("No new sectors found this cycle. Re-calibrating...");
+      // If all generated sectors are already mapped, trim the oldest half of the
+      // searched set so the model can re-explore from fresh angles rather than
+      // spinning forever with an ever-growing exclude list.
+      if (searchedSectors.size > 20) {
+        const arr = Array.from(searchedSectors);
+        searchedSectors = new Set(arr.slice(-15)); // keep only the 15 most recent
+        log(`All sectors exhausted — pruned explore-set to last 15 to unblock new directions.`);
+      } else {
+        log("No new sectors found this cycle. Re-calibrating...");
+      }
       await new Promise(r => setTimeout(r, 2000));
       continue;
     }
@@ -629,33 +666,54 @@ Return the sector names as a JSON array under "sectors". Each sector must have a
           ? `CATEGORIES WE ALREADY TRACK (do not suggest these or anything clearly identical): ${avoidNames.join(", ")}.`
           : "";
 
-        const catResp = await safeGenerate({
+        // Pass 1 — grounded text research for this sector.
+        // Cannot combine responseMimeType/responseSchema with googleSearch — two-pass required.
+        const catRawResp = await safeGenerate({
           model: modelName,
           contents: `${userPrompt}
 
 ${avoidList}
 
 YOUR MISSION: Deep-dive into the consumer sector: "${sector}".
-Use Google Search to discover 3 to 6 HYPER-SPECIFIC, profitable micro-categories within this sector that meet the evaluation criteria above.
+Search for 3 to 6 HYPER-SPECIFIC, profitable micro-categories within this sector that meet the evaluation criteria above.
 
 ANTI-HALLUCINATION RULES (non-negotiable):
-1. ONLY suggest categories with at least ONE real, named, currently-operating business confirmed by search right now.
+1. ONLY report on categories with at least ONE real, named, currently-operating business confirmed by search.
 2. If you cannot find a real business via search, DO NOT include that category.
-3. Populate the sources array with real URLs you retrieve during this search session.
-4. For numeric metrics (CLV, CAC, churn): use 0 if no real searchable benchmark exists — never estimate.
-5. In notes: include the real business name(s) you found, and briefly describe what makes this micro-niche distinct.
+3. For each category describe: the real business name(s) found, why this micro-niche is distinct, and any benchmarks for CLV/CAC/churn if you find them.
+4. List any source URLs you accessed during this search.
 
-Return 3–6 structured category objects. Each must have a non-empty name, a real targetAudience, and at least one source URL.`,
+Write plain text — no JSON yet. Just thorough research notes.`,
           config: {
-            responseMimeType: "application/json",
-            responseSchema: categorySchema,
-            tools: [{ googleSearch: {} }],
-            toolConfig: { includeServerSideToolInvocations: true }
+            tools: [{ googleSearch: {} }]
           }
         });
         if (signal.aborted) return;
 
-        const data = JSON.parse(catResp.text?.trim() || "{}");
+        const catRawText = catRawResp.text?.trim() || '';
+
+        // Capture grounding URLs from Pass 1 metadata before Pass 2 discards them.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const catChunks: any[] = (catRawResp as any).candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
+        const groundingUrls: string[] = catChunks
+          .map((c: any) => c?.web?.uri)
+          .filter((u: any) => typeof u === 'string' && u.startsWith('http'))
+          .slice(0, 8);
+
+        log(`Sector research done for [${sector}]. Extracting structured categories...`);
+
+        // Pass 2 — JSON extraction from the grounded text (no search tools).
+        const catExtractResp = await safeGenerate({
+          model: modelName,
+          contents: `From the following research notes about the "${sector}" consumer sector, extract structured DTC category data and return a JSON object with a "categories" array. Each category needs at minimum a non-empty "name" and "targetAudience". For numeric fields use 0 if not found in the research.\n\nRESEARCH NOTES:\n${catRawText.slice(0, 30000)}`,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: categorySchema
+          }
+        });
+        if (signal.aborted) return;
+
+        const data = JSON.parse(catExtractResp.text?.trim() || "{}");
         const found: any[] = data.categories || [];
 
         // Filter: must have a name. Sources are populated by grounding — no hard filter.
@@ -667,7 +725,8 @@ Return 3–6 structured category objects. Each must have a non-empty name, a rea
           if (signal.aborted) return;
           cat.industry = sector;
           cat.status = 'Researching';
-          const discoverySources: string[] = cat.sources || [];
+          // Merge grounding URLs from Pass 1 with any URLs the model put in sources.
+          const discoverySources: string[] = [...new Set([...(cat.sources || []), ...groundingUrls])];
           const sourceNote = discoverySources.length > 0
             ? `\nDiscovery sources: ${discoverySources.join(', ')}`
             : '\n⚠️ No source URLs captured — run Deep Research to validate all estimates.';
