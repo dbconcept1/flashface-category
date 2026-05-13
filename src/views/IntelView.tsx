@@ -3,7 +3,7 @@ import { IntelNote, IntelSourceType, AIInsight } from '../types';
 import {
   Brain, Plus, Search, X, Mic, Lightbulb, FileText,
   BarChart2, Users, TrendingUp, Trash2, Sparkles, Loader2,
-  CheckCircle2, AlertCircle,
+  CheckCircle2, AlertCircle, BookmarkPlus,
 } from 'lucide-react';
 import { cn } from '../utils';
 
@@ -55,6 +55,8 @@ interface Props {
   onDelete: (id: string) => void;
   /** Triggers AI enrichment and waits for the state update to complete. */
   onEnrich?: (id: string) => Promise<void>;
+  /** Convert an intel note into a Brain OS entry. */
+  onPushToBrain?: (note: IntelNote) => void;
 }
 
 function SourceBadge({ source }: { source: IntelSourceType }) {
@@ -91,12 +93,14 @@ function FilterChip({
 }
 
 function NoteCard({
-  note, isEnriching, onExpand, onDelete,
+  note, isEnriching, onExpand, onDelete, onPushToBrain, pushed,
 }: {
   note: IntelNote;
   isEnriching: boolean;
   onExpand: () => void;
   onDelete: () => void;
+  onPushToBrain?: (note: IntelNote) => void;
+  pushed?: boolean;
 }) {
   const excerpt = note.content.slice(0, 180);
   const isTruncated = note.content.length > 180;
@@ -115,6 +119,18 @@ function NoteCard({
             </span>
           )}
           {isEnriching && <Loader2 className="w-3 h-3 text-violet-400 animate-spin" />}
+          {note.enrichedAt && onPushToBrain && (
+            <button
+              onClick={e => { e.stopPropagation(); onPushToBrain(note); }}
+              title={pushed ? 'Already pushed to Brain OS' : 'Push to Brain OS'}
+              className={cn(
+                'opacity-0 group-hover:opacity-100 transition-all',
+                pushed ? 'text-[#4ade80]/70' : 'text-[#2a2a2a] hover:text-[#e05000]',
+              )}
+            >
+              <BookmarkPlus className="w-3.5 h-3.5" />
+            </button>
+          )}
           <button
             onClick={e => { e.stopPropagation(); onDelete(); }}
             className="opacity-0 group-hover:opacity-100 text-[#2a2a2a] hover:text-[#f87171] transition-all"
@@ -171,13 +187,14 @@ function NoteCard({
   );
 }
 
-export function IntelView({ notes, onAdd, onDelete, onEnrich }: Props) {
+export function IntelView({ notes, onAdd, onDelete, onEnrich, onPushToBrain }: Props) {
   const [search, setSearch]             = useState('');
   const [filterSource, setFilterSource] = useState<IntelSourceType | 'All'>('All');
   const [showAddModal, setShowAddModal] = useState(false);
   const [expandedId, setExpandedId]     = useState<string | null>(null);
   const [enrichingIds, setEnrichingIds] = useState<Set<string>>(new Set());
   const [enrichError, setEnrichError]   = useState<string | null>(null);
+  const [pushedToBrainIds, setPushedToBrainIds] = useState<Set<string>>(new Set());
 
   const [form, setForm] = useState({
     title: '', content: '', source: 'Thought' as IntelSourceType, tags: '',
@@ -229,6 +246,7 @@ export function IntelView({ notes, onAdd, onDelete, onEnrich }: Props) {
 
   const expandedNote = expandedId ? notes.find(n => n.id === expandedId) ?? null : null;
   const enrichedCount = notes.filter(n => !!n.enrichedAt).length;
+  const brainWorthyCount = notes.filter(n => n.enrichedAt && (n.aiInsights?.some(i => i.type === 'principle' || i.type === 'metric') ?? false)).length;
 
   return (
     <div className="space-y-6">
@@ -245,6 +263,19 @@ export function IntelView({ notes, onAdd, onDelete, onEnrich }: Props) {
               <Sparkles className="w-3 h-3 inline mr-1" />
               {enrichedCount} of {notes.length} notes AI-enriched
             </p>
+          )}
+          {brainWorthyCount > 0 && onPushToBrain && (
+            <button
+              onClick={() => {
+                notes
+                  .filter(n => n.enrichedAt && n.aiInsights?.some(i => i.type === 'principle' || i.type === 'metric'))
+                  .forEach(n => { onPushToBrain(n); setPushedToBrainIds(prev => new Set([...prev, n.id])); });
+              }}
+              className="inline-flex items-center gap-1.5 mt-2 px-3 py-1.5 rounded-lg text-[11px] font-semibold border transition-all bg-violet-500/10 border-violet-500/20 text-violet-400 hover:bg-violet-500/20"
+            >
+              <BookmarkPlus className="w-3 h-3" />
+              Auto-promote {brainWorthyCount} insight{brainWorthyCount !== 1 ? 's' : ''} to Brain OS
+            </button>
           )}
         </div>
         <button
@@ -320,6 +351,8 @@ export function IntelView({ notes, onAdd, onDelete, onEnrich }: Props) {
               isEnriching={enrichingIds.has(note.id)}
               onExpand={() => setExpandedId(note.id)}
               onDelete={() => onDelete(note.id)}
+              onPushToBrain={onPushToBrain ? (n) => { onPushToBrain(n); setPushedToBrainIds(prev => new Set([...prev, n.id])); } : undefined}
+              pushed={pushedToBrainIds.has(note.id)}
             />
           ))}
         </div>
@@ -454,6 +487,7 @@ export function IntelView({ notes, onAdd, onDelete, onEnrich }: Props) {
             </div>
 
             <div className="mt-4 pt-4 border-t border-[#1e1e1e] shrink-0 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 flex-wrap">
               <button
                 onClick={() => handleEnrich(expandedNote.id)}
                 disabled={enrichingIds.has(expandedNote.id)}
@@ -473,6 +507,28 @@ export function IntelView({ notes, onAdd, onDelete, onEnrich }: Props) {
                   : <Sparkles className="w-3.5 h-3.5" />}
                 {enrichingIds.has(expandedNote.id) ? 'Enriching…' : expandedNote.enrichedAt ? 'Re-enrich' : 'Enrich with AI'}
               </button>
+              {onPushToBrain && (
+                <button
+                  onClick={() => {
+                    onPushToBrain(expandedNote);
+                    setPushedToBrainIds(prev => new Set([...prev, expandedNote.id]));
+                    setExpandedId(null);
+                  }}
+                  title="Convert this intel note into a Brain OS entry"
+                  className={cn(
+                    'flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold border transition-all',
+                    pushedToBrainIds.has(expandedNote.id)
+                      ? 'bg-[#4ade80]/10 border-[#4ade80]/25 text-[#4ade80]'
+                      : 'bg-[#111] border-[#1e1e1e] text-[#484848] hover:text-[#e05000] hover:border-[#e05000]/25',
+                  )}
+                >
+                  {pushedToBrainIds.has(expandedNote.id)
+                    ? <CheckCircle2 className="w-3.5 h-3.5" />
+                    : <BookmarkPlus className="w-3.5 h-3.5" />}
+                  {pushedToBrainIds.has(expandedNote.id) ? 'Pushed to Brain' : 'Push to Brain OS'}
+                </button>
+              )}
+              </div>
               <button
                 onClick={() => { onDelete(expandedNote.id); setExpandedId(null); }}
                 className="text-xs text-rose-500 hover:text-[#f87171] transition-colors"

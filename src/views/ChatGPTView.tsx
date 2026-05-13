@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Category, Weights, BrainEntry, BrainConversation } from '../types';
+import { Category, Weights, BrainEntry, BrainConversation, TrackedBrand, CompanyProfile, FounderProfile, IntelNote, PodcastEpisode } from '../types';
 import { calculateDecisionScore, calculateLtvCac, getMacroSector, cn } from '../utils';
 import {
   MessageSquare, Send, Square, Plus, Settings2, Loader2,
   User, Bot, ChevronDown, ChevronUp, Copy, CheckCircle2, Brain,
-  BookmarkPlus, History, X,
+  BookmarkPlus, History, X, Database,
 } from 'lucide-react';
 import { getOpenAiApiKey } from '../lib/settings';
 import { compileBrain, estimateBrainTokens } from '../lib/brainCompiler';
+import { buildIntelContext } from '../services/autoIntelService';
 
 interface Props {
   categories: Category[];
@@ -15,6 +16,12 @@ interface Props {
   maxClv: number;
   brainEntries?: BrainEntry[];
   conversations?: BrainConversation[];
+  // Intel Brain context (all optional for backwards compat)
+  trackedBrands?: TrackedBrand[];
+  companyProfiles?: CompanyProfile[];
+  founders?: FounderProfile[];
+  intelNotes?: IntelNote[];
+  podcastEpisodes?: PodcastEpisode[];
   onGoToSettings?: () => void;
   onGoToBrain?: () => void;
   onSaveConversation?: (c: BrainConversation) => void;
@@ -430,6 +437,7 @@ function MessageBubble({ msg, onSaveToBrain }: { msg: Message; onSaveToBrain?: (
 export function ChatGPTView({
   categories, weights, maxClv, brainEntries = [],
   conversations = [], onGoToSettings, onGoToBrain, onSaveConversation, onSaveToBrain,
+  trackedBrands = [], companyProfiles = [], founders = [], intelNotes = [], podcastEpisodes = [],
 }: Props) {
   const apiKey = getOpenAiApiKey();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -461,8 +469,10 @@ export function ChatGPTView({
   const buildSystemContent = useCallback(() => {
     const brain = compileBrain(brainEntries);
     const brainSection = brain ? `\n\n${brain}\n\n---` : '';
-    return `${SYSTEM_PROMPT}${brainSection}\n\n---\n\n${buildSessionData(categories, weights, maxClv)}`;
-  }, [categories, weights, maxClv, brainEntries]);
+    const intelCtx = buildIntelContext(trackedBrands, companyProfiles, founders, intelNotes, podcastEpisodes);
+    const intelSection = intelCtx ? `\n\n---\n\n# INTEL BRAIN — LIVE OPERATIONAL DATA\n${intelCtx}` : '';
+    return `${SYSTEM_PROMPT}${brainSection}\n\n---\n\n${buildSessionData(categories, weights, maxClv)}${intelSection}`;
+  }, [categories, weights, maxClv, brainEntries, trackedBrands, companyProfiles, founders, intelNotes, podcastEpisodes]);
 
   /** Persist the current conversation to all layers. */
   const persistConversation = useCallback((msgs: Message[]) => {
@@ -674,6 +684,15 @@ export function ChatGPTView({
               <Brain className="w-3 h-3" />
               {brainEntries.filter(e => e.priority !== 'archived').length} brain entries
             </button>
+          )}
+          {(trackedBrands.filter(b => b.status === 'complete').length + companyProfiles.length + founders.length + intelNotes.filter(n => n.enrichedAt).length + podcastEpisodes.filter(e => e.processingStatus === 'complete').length) > 0 && (
+            <span
+              title={`Intel Brain in context: ${trackedBrands.filter(b => b.status === 'complete').length} brands · ${companyProfiles.length} companies · ${founders.length} founders · ${intelNotes.filter(n => n.enrichedAt).length} intel notes · ${podcastEpisodes.filter(e => e.processingStatus === 'complete').length} podcast episodes`}
+              className="flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded border text-[#60a5fa] bg-[#60a5fa]/08 border-[#60a5fa]/15"
+            >
+              <Database className="w-3 h-3" />
+              {trackedBrands.filter(b => b.status === 'complete').length + companyProfiles.length + founders.length + intelNotes.filter(n => n.enrichedAt).length + podcastEpisodes.filter(e => e.processingStatus === 'complete').length} intel records
+            </span>
           )}
         </div>
         <button

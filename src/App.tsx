@@ -10,7 +10,7 @@ import { ExportView } from './views/ExportView';
 import { PromptsView } from './views/PromptsView';
 import { DiscoveryView } from './views/DiscoveryView';
 import { cn } from './utils';
-import { Target, LayoutGrid, BarChart2, Plus, Settings2, FileText, DownloadCloud, Loader2, Terminal, Radar, Menu, CheckCircle2, AlertCircle, Cloud, Euro, MessageSquare, Brain, TrendingUp, Headphones } from 'lucide-react';
+import { Target, LayoutGrid, BarChart2, Plus, Settings2, FileText, DownloadCloud, Loader2, Terminal, Radar, Menu, CheckCircle2, AlertCircle, Cloud, Euro, MessageSquare, Brain, TrendingUp, Headphones, Layers } from 'lucide-react';
 import { agenticDeepResearchCategory, discoverDtcCategories, createInitialProgress } from './services/aiService';
 import stringSimilarity from 'string-similarity';
 import { lsLoadCategories, saveAllLayers, loadBestCategories, flushGithubSave } from './lib/db';
@@ -22,7 +22,8 @@ import { FinanceView } from './views/FinanceView';
 import { BrandTrackerView } from './views/BrandTrackerView';
 import { CompanyProfilesView } from './views/CompanyProfilesView';
 import { IdeasView } from './views/IdeasView';
-import type { IntelNote, FinanceScenario, TrackedBrand, CompanyProfile, Idea, FounderPodcast, PodcastEpisode, BrainEntry, BrainConversation } from './types';
+import { MarketLensView } from './views/MarketLensView';
+import type { IntelNote, FinanceScenario, TrackedBrand, CompanyProfile, Idea, FounderPodcast, PodcastEpisode, BrainEntry, BrainConversation, BrainEntryType } from './types';
 import { loadBestBrain, saveBrainAllLayers } from './lib/brainDb';
 import { loadBestConversations, saveConversationsAllLayers } from './lib/conversationDb';
 import { syncChatGptConnectorExtras } from './lib/chatgptConnector';
@@ -39,12 +40,13 @@ import type { FounderProfile } from './types';
 import { scanCompanyReputation } from './services/reputationService';
 import { UserCircle2 } from 'lucide-react';
 
-type ViewMode = 'dashboard' | 'categories' | 'comparison' | 'edit' | 'import' | 'export' | 'prompts' | 'discovery' | 'settings' | 'chatgpt' | 'brain' | 'intel' | 'finance' | 'brands' | 'companies' | 'ideas' | 'podcasts' | 'founders';
+type ViewMode = 'dashboard' | 'categories' | 'comparison' | 'edit' | 'import' | 'export' | 'prompts' | 'discovery' | 'settings' | 'chatgpt' | 'brain' | 'intel' | 'finance' | 'brands' | 'companies' | 'ideas' | 'podcasts' | 'founders' | 'marketlens';
 
 const VIEW_TITLES: Partial<Record<ViewMode, string>> = {
   dashboard: 'Overview',
   categories: 'Categories',
   comparison: 'Comparison Matrix',
+  marketlens: 'Market Opportunity Lens',
   discovery: 'Discovery Swarm',
   import: 'Import Data',
   export: 'Export Data',
@@ -202,6 +204,34 @@ export default function App() {
   const handleDeleteNote = (id: string) => setIntelNotes(prev => prev.filter(n => n.id !== id));
   const handleAddScenario = (s: FinanceScenario) => setFinanceScenarios(prev => [s, ...prev]);
   const handleDeleteScenario = (id: string) => setFinanceScenarios(prev => prev.filter(s => s.id !== id));
+
+  const handlePushNoteToBrain = (note: IntelNote) => {
+    const intelSourceMap: Record<string, BrainEntryType> = {
+      'Podcast': 'insight',
+      'Interview': 'insight',
+      'Market Research': 'insight',
+      'User Feedback': 'insight',
+      'Competitor': 'brand',
+      'Article': 'note',
+      'Book': 'note',
+      'Thought': 'principle',
+    };
+    const entryType: BrainEntryType = intelSourceMap[note.source] ?? 'note';
+    const topInsight = note.aiInsights?.[0]?.text ?? '';
+    handleAddBrainEntry({
+      id: crypto.randomUUID(),
+      type: entryType,
+      title: note.title || note.content.slice(0, 60),
+      content: note.content,
+      source: note.source,
+      implication: topInsight || note.content.slice(0, 160),
+      tags: note.tags,
+      priority: 'reference',
+      confidence: note.enrichedAt ? 'strong' : 'belief',
+      createdAt: note.createdAt,
+      updatedAt: new Date().toISOString(),
+    });
+  };
 
   const handleEnrichNote = async (id: string) => {
     const note = intelNotes.find(n => n.id === id);
@@ -899,6 +929,12 @@ export default function App() {
                 active={currentView === 'comparison'}
                 onClick={() => setCurrentView('comparison')}
               />
+              <NavItem
+                icon={<Layers className="w-[15px] h-[15px]" />}
+                label="Market Lens"
+                active={currentView === 'marketlens'}
+                onClick={() => setCurrentView('marketlens')}
+              />
             </NavSection>
 
             <NavSection label="Intel Brain">
@@ -1209,6 +1245,7 @@ export default function App() {
             {currentView === 'dashboard' && <DashboardView categories={categories} weights={ weights} maxClv={maxClv} />}
             {currentView === 'categories' && <CategoriesView categories={categories} weights={weights} maxClv={maxClv} onEdit={openEditor} onUpdateStatus={handleUpdateStatus} onDeepSearch={handleDeepSearch} onDeepSearchAllNew={handleDeepSearchAllNew} onRefreshResearched={handleRefreshResearched} onRefreshFailed={handleRefreshFailed} onStopBulkResearch={handleStopBulkResearch} isBulkResearching={isBulkResearching} bulkStats={bulkStats} />}
             {currentView === 'comparison' && <ComparisonView categories={categories} weights={weights} maxClv={maxClv} />}
+            {currentView === 'marketlens' && <MarketLensView categories={categories} />}
             {currentView === 'import' && <ImportView onImport={handleImport} state={importState} setState={setImportState} existingCategories={categories} />}
             {currentView === 'discovery' && (
               <DiscoveryView 
@@ -1223,9 +1260,9 @@ export default function App() {
             {currentView === 'export' && <ExportView categories={categories} />}
             {currentView === 'prompts' && <PromptsView />}
             {currentView === 'settings' && <SettingsView onRefreshSpending={() => setSpendingRefresh(v => v + 1)} />}
-            {currentView === 'chatgpt' && <ChatGPTView categories={categories} weights={weights} maxClv={maxClv} brainEntries={brainEntries} conversations={conversations} onGoToSettings={() => setCurrentView('settings')} onGoToBrain={() => setCurrentView('brain')} onSaveConversation={handleSaveConversation} onSaveToBrain={handleSaveToBrain} />}
+            {currentView === 'chatgpt' && <ChatGPTView categories={categories} weights={weights} maxClv={maxClv} brainEntries={brainEntries} conversations={conversations} onGoToSettings={() => setCurrentView('settings')} onGoToBrain={() => setCurrentView('brain')} onSaveConversation={handleSaveConversation} onSaveToBrain={handleSaveToBrain} trackedBrands={trackedBrands} companyProfiles={companyProfiles} founders={founders} intelNotes={intelNotes} podcastEpisodes={podcastEpisodes} />}
             {currentView === 'brain' && <BrainView entries={brainEntries} onAdd={handleAddBrainEntry} onUpdate={handleUpdateBrainEntry} onDelete={handleDeleteBrainEntry} prefillContent={prefillBrainContent} onClearPrefill={() => setPrefillBrainContent(null)} />}
-            {currentView === 'intel' && <IntelView notes={intelNotes} onAdd={handleAddNote} onDelete={handleDeleteNote} onEnrich={handleEnrichNote} />}
+            {currentView === 'intel' && <IntelView notes={intelNotes} onAdd={handleAddNote} onDelete={handleDeleteNote} onEnrich={handleEnrichNote} onPushToBrain={handlePushNoteToBrain} />}
             {currentView === 'brands' && <BrandTrackerView brands={trackedBrands} onAdd={handleAddBrand} onDelete={(id) => setTrackedBrands(prev => prev.filter(b => b.id !== id))} onRetry={handleRetryBrand} onAddToCategories={handleAddBrandToCategories} onToggleSchedule={handleToggleBrandSchedule} categories={categories} companies={companyProfiles} onLinkToCompany={handleLinkBrandToCompany} />}
             {currentView === 'companies' && <CompanyProfilesView profiles={companyProfiles} onChange={setCompanyProfiles} />}
             {currentView === 'ideas' && <IdeasView ideas={ideas} onAdd={(idea) => setIdeas(prev => [idea, ...prev])} onUpdate={(idea) => setIdeas(prev => prev.map(i => i.id === idea.id ? idea : i))} onDelete={(id) => setIdeas(prev => prev.filter(i => i.id !== id))} />}
