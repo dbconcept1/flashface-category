@@ -10,7 +10,7 @@ import { ExportView } from './views/ExportView';
 import { PromptsView } from './views/PromptsView';
 import { DiscoveryView } from './views/DiscoveryView';
 import { cn } from './utils';
-import { Target, LayoutGrid, BarChart2, Plus, Settings2, FileText, DownloadCloud, Loader2, Terminal, Radar, Menu, CheckCircle2, AlertCircle, Cloud, Euro, MessageSquare, Brain, TrendingUp, Headphones, Telescope } from 'lucide-react';
+import { Target, LayoutGrid, BarChart2, Plus, Settings2, FileText, DownloadCloud, Loader2, Terminal, Radar, Menu, CheckCircle2, AlertCircle, Cloud, Euro, MessageSquare, Brain, TrendingUp, Headphones, Telescope, Layers } from 'lucide-react';
 import { agenticDeepResearchCategory, discoverDtcCategories, createInitialProgress } from './services/aiService';
 import stringSimilarity from 'string-similarity';
 import { lsLoadCategories, saveAllLayers, loadBestCategories, flushGithubSave } from './lib/db';
@@ -36,6 +36,7 @@ import { discoverFounderEpisodes, extractEpisodeInsights } from './services/podc
 import { getSettings, calcBudgetPercent } from './lib/settings';
 import { useResearchSetter } from './lib/researchContext';
 import { FoundersView } from './views/FoundersView';
+import { MarketLensView } from './views/MarketLensView';
 import type { FounderProfile } from './types';
 import { scanCompanyReputation } from './services/reputationService';
 import { UserCircle2 } from 'lucide-react';
@@ -678,7 +679,7 @@ export default function App() {
         return c;
       }));
       // Auto-extract founders mentioned in deep research and offer as FounderProfile stubs
-      const foundersText = enriched.agentResults?.foundersAndTeam || enriched.agentResults?.competitiveAnalysis || '';
+      const foundersText = enriched.agentResults?.foundersAndTeam || enriched.agentResults?.globalCompetitors || '';
       if (foundersText) {
         extractFoundersFromResearch(category.name, foundersText).then(extracted => {
           if (!extracted.length) return;
@@ -1005,6 +1006,12 @@ export default function App() {
                 active={currentView === 'comparison'}
                 onClick={() => setCurrentView('comparison')}
               />
+              <NavItem
+                icon={<Layers className="w-[15px] h-[15px]" />}
+                label="Market Lens"
+                active={currentView === 'marketlens'}
+                onClick={() => setCurrentView('marketlens')}
+              />
             </NavSection>
 
             <NavSection label="Intel Brain">
@@ -1173,6 +1180,11 @@ export default function App() {
                 <p className="text-[10px] text-[#333] uppercase tracking-[0.1em] font-semibold">Intel Radar</p>
                 <p className="text-xs text-[#3a3a3a] mt-0.5">{radarCompanies.length + radarInvestors.length} result{(radarCompanies.length + radarInvestors.length) !== 1 ? 's' : ''}</p>
               </div>
+            ) : currentView === 'marketlens' ? (
+              <div className="text-center py-1">
+                <p className="text-[10px] text-[#333] uppercase tracking-[0.1em] font-semibold">Market Lens</p>
+                <p className="text-xs text-[#3a3a3a] mt-0.5">{categories.filter(c => c.status !== 'Killed').length} categories</p>
+              </div>
             ) : (
               <button
                 onClick={() => openEditor(null)}
@@ -1320,6 +1332,7 @@ export default function App() {
             {currentView === 'dashboard' && <DashboardView categories={categories} weights={ weights} maxClv={maxClv} />}
             {currentView === 'categories' && <CategoriesView categories={categories} weights={weights} maxClv={maxClv} onEdit={openEditor} onUpdateStatus={handleUpdateStatus} onDeepSearch={handleDeepSearch} onDeepSearchAllNew={handleDeepSearchAllNew} onRefreshResearched={handleRefreshResearched} onRefreshFailed={handleRefreshFailed} onStopBulkResearch={handleStopBulkResearch} isBulkResearching={isBulkResearching} bulkStats={bulkStats} />}
             {currentView === 'comparison' && <ComparisonView categories={categories} weights={weights} maxClv={maxClv} />}
+            {currentView === 'marketlens' && <MarketLensView categories={categories} />}
             {currentView === 'import' && <ImportView onImport={handleImport} state={importState} setState={setImportState} existingCategories={categories} />}
             {currentView === 'discovery' && (
               <DiscoveryView 
