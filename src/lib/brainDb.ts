@@ -110,6 +110,15 @@ export async function saveBrainAllLayers(entries: BrainEntry[]): Promise<{ api: 
 
 // ─── Combined load (best-wins merge) ─────────────────────────────────────────
 
+/**
+ * Returns the most recently modified brain dataset across the three layers.
+ *
+ * FIX: Old strategy used entry COUNT which could resurrect a stale backup that
+ * happened to have more total entries than the current canonical save.
+ * New strategy: compare the `updatedAt` timestamp of the newest entry in each
+ * layer — the layer with the most recent modification wins.
+ * Tie-break: most entries wins (safest fallback).
+ */
 export async function loadBestBrain(): Promise<{ entries: BrainEntry[]; source: string }> {
   const [lsEntries, apiEntries, idbEntries] = await Promise.all([
     Promise.resolve(lsLoadBrain()),
@@ -123,7 +132,23 @@ export async function loadBestBrain(): Promise<{ entries: BrainEntry[]; source: 
     { entries: idbEntries, label: 'IndexedDB'    },
   ];
 
-  // Winner = most entries (most data = most recent meaningful save)
-  const best = candidates.reduce((a, b) => b.entries.length > a.entries.length ? b : a);
+  // Compute "freshness score" = timestamp of the newest entry's updatedAt field.
+  // Layers with no entries get epoch 0 so they never win unless all are empty.
+  const freshness = (entries: BrainEntry[]): number => {
+    if (entries.length === 0) return 0;
+    return entries.reduce((max, e) => {
+      const t = e.updatedAt ? new Date(e.updatedAt).getTime() : 0;
+      return t > max ? t : max;
+    }, 0);
+  };
+
+  const best = candidates.reduce((a, b) => {
+    const fa = freshness(a.entries);
+    const fb = freshness(b.entries);
+    if (fb !== fa) return fb > fa ? b : a;
+    // Tie-break: more entries = safer choice
+    return b.entries.length > a.entries.length ? b : a;
+  });
+
   return { entries: best.entries, source: best.label };
 }

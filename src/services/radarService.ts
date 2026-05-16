@@ -15,8 +15,9 @@
  */
 
 import { GoogleGenAI, Type } from "@google/genai";
-import type { RadarCompany, RadarInvestor, RadarRegion } from "../types";
+import type { RadarCompany, RadarInvestor, RadarRegion, BrainEntry } from "../types";
 import { getApiKey, checkBudget, recordGeminiUsageFromResponse } from "../lib/settings";
+import { compileDirectivePrompt } from "../lib/directives";
 
 // ─── Retry helper ─────────────────────────────────────────────────────────────
 
@@ -172,7 +173,8 @@ Run ALL of the following search queries and extract real company names + signals
  */
 export async function scanCompanies(
   regions: RadarRegion[],
-  onProgress: (msg: string) => void
+  onProgress: (msg: string) => void,
+  brainEntries: BrainEntry[] = []
 ): Promise<RadarCompany[]> {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error("No Gemini API key configured. Add your key in Settings.");
@@ -198,10 +200,12 @@ export async function scanCompanies(
   onProgress(`Launching company intelligence scan for: ${regionStr}...`);
   onProgress(`Pass 1: Running grounded web searches across ${regions.length} region(s)...`);
 
+  const directiveBlock = compileDirectivePrompt(brainEntries, 'radar');
+
   // Pass 1: grounded search — raw text only (cannot combine schema + googleSearch)
   const searchResponse = await safeGenerate({
     model: modelName,
-    contents: buildCompanySearchPrompt(regions),
+    contents: directiveBlock + buildCompanySearchPrompt(regions),
     config: {
       tools: [{ googleSearch: {} }],
     },
@@ -419,7 +423,8 @@ ${regionalSpecifics}
  */
 export async function scanInvestors(
   regions: RadarRegion[],
-  onProgress: (msg: string) => void
+  onProgress: (msg: string) => void,
+  brainEntries: BrainEntry[] = []
 ): Promise<RadarInvestor[]> {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error("No Gemini API key configured. Add your key in Settings.");
@@ -445,10 +450,12 @@ export async function scanInvestors(
   onProgress(`Launching hidden investor scan for: ${regionStr}...`);
   onProgress(`Pass 1: Running deep grounded web searches to surface quiet capital holders...`);
 
+  const investorDirectiveBlock = compileDirectivePrompt(brainEntries, 'radar');
+
   // Pass 1: grounded search
   const searchResponse = await safeGenerate({
     model: modelName,
-    contents: buildInvestorSearchPrompt(regions),
+    contents: investorDirectiveBlock + buildInvestorSearchPrompt(regions),
     config: {
       tools: [{ googleSearch: {} }],
     },

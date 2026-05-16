@@ -12,6 +12,8 @@
 
 import { GoogleGenAI } from '@google/genai';
 import { getApiKey, recordGeminiUsageFromResponse } from '../lib/settings';
+import type { BrainEntry } from '../types';
+import { compileDirectivePrompt } from '../lib/directives';
 import type {
   IntelNote,
   TrackedBrand,
@@ -39,13 +41,15 @@ export interface ExtractedFounder {
 export async function extractFoundersFromResearch(
   categoryName: string,
   researchText: string,
+  brainEntries: BrainEntry[] = [],
 ): Promise<ExtractedFounder[]> {
   const apiKey = getApiKey();
   if (!apiKey || !researchText?.trim()) return [];
 
   const ai = new GoogleGenAI({ apiKey });
+  const directiveBlock = compileDirectivePrompt(brainEntries, 'intel');
 
-  const prompt = `Extract founder and key executive names from this market research about "${categoryName}".
+  const prompt = `${directiveBlock}Extract founder and key executive names from this market research about "${categoryName}".
 
 Research text:
 ${researchText.slice(0, 2500)}

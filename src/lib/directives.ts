@@ -34,11 +34,16 @@ import type { BrainEntry } from '../types';
 
 // ─── Scope types ──────────────────────────────────────────────────────────────
 
-export type DirectiveScope = 'discovery' | 'deep-research' | 'all';
+export type DirectiveScope = 'discovery' | 'deep-research' | 'memo' | 'signal' | 'radar' | 'intel' | 'nlquery' | 'all';
 
 const SCOPE_TAGS: Record<DirectiveScope, string> = {
   discovery:       'directive:discovery',
   'deep-research': 'directive:deep-research',
+  memo:            'directive:memo',
+  signal:          'directive:signal',
+  radar:           'directive:radar',
+  intel:           'directive:intel',
+  nlquery:         'directive:nlquery',
   all:             'directive:all',
 };
 

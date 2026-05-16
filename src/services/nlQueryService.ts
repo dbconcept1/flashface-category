@@ -9,7 +9,8 @@
 
 import { GoogleGenAI } from '@google/genai';
 import { getApiKey, recordGeminiUsageFromResponse } from '../lib/settings';
-import type { Category } from '../types';
+import type { Category, BrainEntry } from '../types';
+import { compileDirectivePrompt } from '../lib/directives';
 
 export interface ParsedFilter {
   minClv?: number;
@@ -24,13 +25,14 @@ export interface ParsedFilter {
   explanation: string;
 }
 
-export async function parseNlQuery(query: string): Promise<ParsedFilter> {
+export async function parseNlQuery(query: string, brainEntries: BrainEntry[] = []): Promise<ParsedFilter> {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('No API key');
 
   const ai = new GoogleGenAI({ apiKey });
+  const directiveBlock = compileDirectivePrompt(brainEntries, 'nlquery');
 
-  const prompt = `You are a filter parser for a DTC subscription category database.
+  const prompt = `${directiveBlock}You are a filter parser for a DTC subscription category database.
 
 The user typed: "${query}"
 

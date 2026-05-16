@@ -60,6 +60,7 @@ export function ExportView({ categories }: Props) {
           ['foundersAndTeam', 'Founders & Team'],
           ['adIntelligence', 'Ad Intelligence'],
           ['retentionEngineering', 'Retention Engineering'],
+          ['searchTrends', 'Search Trends'],
         ];
         for (const [key, label] of agentLabels) {
           const val = agents[key];

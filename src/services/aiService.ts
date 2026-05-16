@@ -1,7 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { Category, BrainEntry } from "../types";
+import { Category } from "../types";
 import { getApiKey, checkBudget, recordGeminiUsageFromResponse, getPreferredModel } from "../lib/settings";
-import { compileDirectivePrompt } from "../lib/directives";
 
 /** Retries a Gemini API call with exponential backoff on rate-limit / transient errors */
 async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
@@ -78,8 +77,7 @@ export interface DiscoveryProgress {
 export async function agenticDeepResearchCategory(
   category: Category,
   onProgress: (progress: ResearchProgress) => void,
-  onPartialUpdate?: (update: Partial<Category>) => void,
-  brainEntries: BrainEntry[] = []
+  onPartialUpdate?: (update: Partial<Category>) => void
 ): Promise<Partial<Category>> {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error("No Gemini API key configured. Add your key in Settings.");
@@ -114,16 +112,24 @@ export async function agenticDeepResearchCategory(
 
   // ─── Two-pass helpers ───────────────────────────────────────────────────────
   // Gemini does not allow responseMimeType:"application/json" + googleSearch together.
-  // Pass 1 uses googleSearch (plain text output).
+  // Pass 1 uses googleSearch (plain text output) and captures grounding source URLs.
   // Pass 2 extracts structured data from that text (JSON schema, no search tools).
 
-  const searchRaw = async (prompt: string, agent: ResearchAgentKey): Promise<string> => {
+  const searchRaw = async (prompt: string, agent: ResearchAgentKey): Promise<{ text: string; sources: string[] }> => {
     const resp = await safeGenerate({
       model: modelName,
       contents: prompt,
       config: { tools: [{ googleSearch: {} }] },
     }, { operation: 'grounded-search', agent });
-    return resp.text?.trim() || '';
+    // Capture verified source URLs from the grounding metadata.
+    // These are the ACTUAL pages the model retrieved — the strongest evidence of non-hallucination.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chunks: any[] = (resp as any).candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
+    const sources: string[] = chunks
+      .map((c: any) => c?.web?.uri)
+      .filter((u: any): u is string => typeof u === 'string' && u.startsWith('http'))
+      .slice(0, 12);
+    return { text: resp.text?.trim() || '', sources };
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -131,22 +137,26 @@ export async function agenticDeepResearchCategory(
     const resp = await safeGenerate({
       model: modelName,
       contents: `${hint}\n\n---RESEARCH TEXT START---\n${rawText.slice(0, 30000)}\n---RESEARCH TEXT END---`,
-      config: { responseMimeType: 'application/json', responseSchema: schema },
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: schema,
+        // Low temperature: extraction is a deterministic reading task, not a creative one.
+        // At the default 1.0 the model can "creatively" fill in numbers that aren't clearly
+        // stated. At 0.15 it reliably returns 0 / "Unknown" for anything uncertain.
+        temperature: 0.15,
+      },
     }, { operation: 'json-extraction', agent });
     return JSON.parse(resp.text?.trim() || '{}') as T;
   };
   // ───────────────────────────────────────────────────────────────────────────
-
-  // Compile active directives for deep-research scope and prepend to all agent prompts.
-  const directiveBlock = compileDirectivePrompt(brainEntries, 'deep-research');
 
   updateProgress({ overall: `Launching 7 autonomous agents for ${category.name}...` });
 
   const runUnitEconomicsAgent = async (): Promise<{ result: Partial<Category>, raw: string, sources: string[] }> => {
     updateAgent('unitEconomics', 'running', 'Searching pricing, LTV, CAC models on Reddit & scientific sources...');
     try {
-      // Pass 1: grounded search → plain text
-      const raw = await searchRaw(`${directiveBlock}You are an expert e-commerce unit economics analyst. Deeply research the Customer Lifetime Value (CLV, in Euros) and Customer Acquisition Cost (CAC, in Euros) for the category: "${category.name}" targeting "${category.targetAudience}". Focus entirely on realistic European/NL metrics.
+      // Pass 1: grounded search → plain text + verified source URLs
+      const { text: raw, sources } = await searchRaw(`You are an expert e-commerce unit economics analyst. Deeply research the Customer Lifetime Value (CLV, in Euros) and Customer Acquisition Cost (CAC, in Euros) for the category: "${category.name}" targeting "${category.targetAudience}". Focus entirely on realistic European/NL metrics.
         ANTI-HALLUCINATION: Every CLV/CAC figure MUST be backed by a real URL found via search. Return 0 for any metric you cannot source. Cite every URL used.
 
         MANDATORY SEARCHES — run ALL of these:
@@ -160,8 +170,11 @@ export async function agenticDeepResearchCategory(
         - site:reddit.com/r/ecommerce "${category.name}" CAC OR CLV OR "lifetime value"
         - "${category.name}" subscription ARPU "average revenue per user"
         - "${category.name}" unit economics startup pitch deck investor
+        - "${category.name}" subscription "closed" OR "failed" OR "shut down" — what went wrong
+        - "${category.name}" subscription "high churn" OR "customers cancel" OR "hard to retain"
+        - "${category.name}" CAC "too high" OR "not profitable" OR "burned cash"
 
-        Keep CLV and CAC completely separate. Return a comprehensive breakdown with inline source citations.`, 'unitEconomics');
+        Keep CLV and CAC completely separate. Report BOTH positive benchmarks AND any documented failure signals. Return a comprehensive breakdown with inline source citations.`, 'unitEconomics');
       // Pass 2: extract numeric fields from the research text
       const extracted = await extractJson<{ estimatedCLV: number; estimatedCAC: number }>(
         raw,
@@ -170,18 +183,18 @@ export async function agenticDeepResearchCategory(
         'unitEconomics'
       );
       updateAgent('unitEconomics', 'completed', 'Unit economics finalized.');
-      return { result: { estimatedCLV: extracted.estimatedCLV, estimatedCAC: extracted.estimatedCAC }, raw, sources: [] };
+      return { result: { estimatedCLV: extracted.estimatedCLV, estimatedCAC: extracted.estimatedCAC }, raw, sources };
     } catch (e: any) {
       updateAgent('unitEconomics', 'error', e.message);
       return { result: {}, raw: `Error: ${e.message}`, sources: [] };
     }
-  };
+  }; // end runUnitEconomicsAgent
 
   const runMarketDynamicsAgent = async (): Promise<{ result: Partial<Category>, raw: string, sources: string[] }> => {
     updateAgent('marketDynamics', 'running', 'Analyzing global & NL market sizes, churn, and CAGR...');
     try {
-      // Pass 1: grounded search → plain text
-      const raw = await searchRaw(`${directiveBlock}You are a European Consumer Market Researcher specialising in bottom-up market sizing for the Netherlands.
+      // Pass 1: grounded search → plain text + verified source URLs
+      const { text: raw, sources } = await searchRaw(`You are a European Consumer Market Researcher specialising in bottom-up market sizing for the Netherlands.
 CATEGORY: "${category.name}" | TARGET: "${category.targetAudience}"
 
 Research market size (global/EU/NL), CAGR, monthly churn %, and compute a realistic TAM→SAM→SOM funnel for NL.
@@ -196,8 +209,12 @@ MANDATORY SEARCHES:
 - "${category.name}" TAM SAM SOM Netherlands consumer market
 - "${category.name}" emotional loyalty brand retention study
 - "${category.name}" micro-niche DTC opportunity 2025 2026
+- "${category.name}" "declining" OR "oversaturated" OR "dying" market 2025 2026
+- "${category.name}" subscription "negative unit economics" OR "unsustainable" OR "failed"
+- "${category.name}" crowded market "too many players" OR "commoditized"
 
 ANTI-HALLUCINATION: Every figure must cite a real URL. Write "Unknown (no source found)" for unverifiable data.
+ANTI-SYCOPHANCY: If negative signals dominate, report them prominently. A marketSizeScore of 30–50 for a crowded or declining market is ACCURATE, not pessimistic. An honest low score is more valuable than an inflated 70.
 Return comprehensive markdown covering market size, churn, CAGR, consumer psychology, and the full funnel.`, 'marketDynamics');
 
       // Pass 2: extract structured fields
@@ -230,17 +247,17 @@ Return comprehensive markdown covering market size, churn, CAGR, consumer psycho
         'marketDynamics'
       );
       updateAgent('marketDynamics', 'completed', 'Market dynamics mapped.');
-      return { result: extracted, raw, sources: [] };
+      return { result: extracted, raw, sources };
     } catch (e: any) {
       updateAgent('marketDynamics', 'error', e.message);
       return { result: {}, raw: `Error: ${e.message}`, sources: [] };
     }
-  };
+  }; // end runMarketDynamicsAgent
 
   const runLocalCompetitorsAgent = async (): Promise<{ raw: string, sources: string[] }> => {
     updateAgent('localCompetitors', 'running', 'Spying on local NL/EU players...');
     try {
-      const raw = await searchRaw(`${directiveBlock}You are a competitive intelligence operative. Search for and list local competitors in the Netherlands (or broader EU) selling: "${category.name}" to "${category.targetAudience}".
+      const { text: raw, sources } = await searchRaw(`You are a competitive intelligence operative. Search for and list local competitors in the Netherlands (or broader EU) selling: "${category.name}" to "${category.targetAudience}".
 
         MANDATORY SEARCHES — run ALL of these:
         - "${category.name}" subscription Netherlands OR "Nederland" webshop
@@ -256,17 +273,17 @@ Return comprehensive markdown covering market size, churn, CAGR, consumer psycho
 
         For each of 2-4 real competitors: company name, URL, monthly traffic estimate (SimilarWeb), pricing, Trustpilot score, positioning angle, and key gap/weakness to exploit.`, 'localCompetitors');
       updateAgent('localCompetitors', 'completed', 'Local competition analyzed.');
-      return { raw, sources: [] };
+      return { raw, sources };
     } catch (e: any) {
       updateAgent('localCompetitors', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
     }
-  };
+  }; // end runLocalCompetitorsAgent
 
   const runGlobalCompetitorsAgent = async (): Promise<{ raw: string, sources: string[] }> => {
     updateAgent('globalCompetitors', 'running', 'Scanning US/Global pioneers...');
     try {
-      const raw = await searchRaw(`${directiveBlock}You are a 2026 DTC trend analyst and global competitive intelligence specialist. Research the most successful global players for: "${category.name}" targeting "${category.targetAudience}".
+      const { text: raw, sources } = await searchRaw(`You are a 2026 DTC trend analyst and global competitive intelligence specialist. Research the most successful global players for: "${category.name}" targeting "${category.targetAudience}".
 
         MANDATORY SEARCHES — run ALL of these:
         - "${category.name}" DTC direct-to-consumer subscription US UK global top brand 2025 2026
@@ -282,18 +299,18 @@ Return comprehensive markdown covering market size, churn, CAGR, consumer psycho
 
         Identify what makes the top 1-2 global players successful: exact growth channels, retention mechanics, product diff, unit economics.`, 'globalCompetitors');
       updateAgent('globalCompetitors', 'completed', 'Global benchmarks identified.');
-      return { raw, sources: [] };
+      return { raw, sources };
     } catch (e: any) {
       updateAgent('globalCompetitors', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
     }
-  };
+  }; // end runGlobalCompetitorsAgent
 
   const runLegalLogisticsAgent = async (): Promise<{ result: Partial<Category>, raw: string, sources: string[] }> => {
     updateAgent('legalLogistics', 'running', 'Checking NL legal & ad restrictions...');
     try {
       // Pass 1: grounded search
-      const raw = await searchRaw(`${directiveBlock}You are a Dutch Legal and E-commerce Compliance Expert. Analyze the category: "${category.name}" for the Netherlands market. Is it legal? Does it require special licenses? Is it a restricted ad category on Meta/Google?
+      const { text: raw, sources } = await searchRaw(`You are a Dutch Legal and E-commerce Compliance Expert. Analyze the category: "${category.name}" for the Netherlands market. Is it legal? Does it require special licenses? Is it a restricted ad category on Meta/Google?
         ANTI-HALLUCINATION: Only cite legal requirements found via search on official sources (overheid.nl, autoriteitpersoonsgegevens.nl, reclame.code.nl). Write "Unverified — consult a Dutch e-commerce lawyer" for anything not verified.`, 'legalLogistics');
       // Pass 2: extract structured fields
       const extracted = await extractJson<{ regulatoryRiskNL: string; legalAndAdRestrictions: string }>(
@@ -303,17 +320,17 @@ Return comprehensive markdown covering market size, churn, CAGR, consumer psycho
         'legalLogistics'
       );
       updateAgent('legalLogistics', 'completed', 'Legal and compliance checked.');
-      return { result: { regulatoryRiskNL: extracted.regulatoryRiskNL as any, legalAndAdRestrictions: extracted.legalAndAdRestrictions }, raw, sources: [] };
+      return { result: { regulatoryRiskNL: extracted.regulatoryRiskNL as any, legalAndAdRestrictions: extracted.legalAndAdRestrictions }, raw, sources };
     } catch (e: any) {
       updateAgent('legalLogistics', 'error', e.message);
       return { result: {}, raw: `Error: ${e.message}`, sources: [] };
     }
-  };
+  }; // end runLegalLogisticsAgent
 
   const runSuppliersBudgetAgent = async (): Promise<{ raw: string, sources: string[] }> => {
     updateAgent('suppliersBudget', 'running', 'Checking suppliers and startup budget...');
     try {
-      const raw = await searchRaw(`${directiveBlock}You are a scrappy e-commerce founder and supply chain expert. For the category: "${category.name}", map every realistic supply chain option and startup cost for an NL-based DTC subscription launch.
+      const { text: raw, sources } = await searchRaw(`You are a scrappy e-commerce founder and supply chain expert. For the category: "${category.name}", map every realistic supply chain option and startup cost for an NL-based DTC subscription launch.
 
         MANDATORY SEARCHES — run ALL of these:
         - site:alibaba.com "${category.name}" minimum order quantity white label
@@ -330,17 +347,17 @@ Return comprehensive markdown covering market size, churn, CAGR, consumer psycho
 
         Provide: real supplier names, MOQ, unit cost, estimated COGs%, and a full MVP budget breakdown from €0 to 100 subscribers in NL.`, 'suppliersBudget');
       updateAgent('suppliersBudget', 'completed', 'Suppliers and budget analyzed.');
-      return { raw, sources: [] };
+      return { raw, sources };
     } catch (e: any) {
       updateAgent('suppliersBudget', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
     }
-  };
+  }; // end runSuppliersBudgetAgent
 
   const runAdIntelligenceAgent = async (): Promise<{ raw: string, sources: string[] }> => {
     updateAgent('adIntelligence', 'running', 'Scanning Meta/TikTok ad library, CPM benchmarks, creative hooks...');
     try {
-      const raw = await searchRaw(`${directiveBlock}You are a 2026 DTC performance marketing specialist. Research the full paid media landscape for: "${category.name}" targeting "${category.targetAudience}" in the Netherlands.
+      const { text: raw, sources } = await searchRaw(`You are a 2026 DTC performance marketing specialist. Research the full paid media landscape for: "${category.name}" targeting "${category.targetAudience}" in the Netherlands.
 
 MANDATORY SEARCHES — run ALL of these:
 - site:facebook.com/ads/library "${category.name}" — active Meta ads targeting NL/EU
@@ -356,20 +373,23 @@ MANDATORY SEARCHES — run ALL of these:
 - "${category.name}" Performance Max Google 2025 2026
 - "${category.name}" Nederlandse influencer samenwerking OR NL creator partnership
 - "${category.name}" ad fatigue creative refresh cycle subscription
+- "${category.name}" Meta ads "policy violation" OR "restricted category" OR "banned"
+- "${category.name}" CAC "too high" OR "not profitable" OR "CPM rising" Netherlands 2025 2026
+- "${category.name}" "ad saturation" OR "creative exhaustion" OR "audience fatigue" paid media
 
-Return a comprehensive paid-media intelligence report covering: channel CAC breakdown table, Meta/TikTok/Google tactics, influencer/UGC strategy, 2026-specific opportunities, and creative hooks. ANTI-HALLUCINATION: All CPM/CPC/ROAS/CAC figures must trace to a real source URL from this session.`, 'adIntelligence');
+Return a comprehensive paid-media intelligence report covering: channel CAC breakdown table, Meta/TikTok/Google tactics, influencer/UGC strategy, 2026-specific opportunities, and creative hooks. Also explicitly report any documented ad restrictions, banned categories, or high-CAC warnings. ANTI-HALLUCINATION: All CPM/CPC/ROAS/CAC figures must trace to a real source URL from this session.`, 'adIntelligence');
       updateAgent('adIntelligence', 'completed', 'Ad intelligence mapped.');
-      return { raw, sources: [] };
+      return { raw, sources };
     } catch (e: any) {
       updateAgent('adIntelligence', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
     }
-  };
+  }; // end runAdIntelligenceAgent
 
   const runRetentionEngineeringAgent = async (): Promise<{ raw: string, sources: string[] }> => {
     updateAgent('retentionEngineering', 'running', 'Mapping cohort retention, churn drivers, subscription term economics...');
     try {
-      const raw = await searchRaw(`${directiveBlock}You are a subscription retention engineer and DTC growth expert. Research cohort economics and retention for: "${category.name}" targeting "${category.targetAudience}".
+      const { text: raw, sources } = await searchRaw(`You are a subscription retention engineer and DTC growth expert. Research cohort economics and retention for: "${category.name}" targeting "${category.targetAudience}".
 
 MANDATORY SEARCHES — run ALL of these:
 - "${category.name}" subscription retention benchmark 2025 2026
@@ -388,31 +408,31 @@ MANDATORY SEARCHES — run ALL of these:
 
 Return a full retention engineering report covering: retention benchmarks table, churn drivers, subscription term economics, win-back playbook, dunning defense, referral/loyalty uplift, and 2026 tactics. ANTI-HALLUCINATION: Cite real source URLs from this session.`, 'retentionEngineering');
       updateAgent('retentionEngineering', 'completed', 'Retention engineering report complete.');
-      return { raw, sources: [] };
+      return { raw, sources };
     } catch (e: any) {
       updateAgent('retentionEngineering', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
     }
-  };
+  }; // end runRetentionEngineeringAgent
 
   const runFoundersTeamAgent = async (): Promise<{ raw: string, sources: string[] }> => {
     updateAgent('foundersAndTeam', 'running', 'Discovering founders and linkedIn profiles...');
     try {
-      const raw = await searchRaw(`${directiveBlock}You are an elite talent scout and investigative journalist. Find the founders or key people of the top 3 companies in the category: "${category.name}".
+      const { text: raw, sources } = await searchRaw(`You are an elite talent scout and investigative journalist. Find the founders or key people of the top 3 companies in the category: "${category.name}".
         ANTI-HALLUCINATION RULE FOR LINKEDIN URLS: Only include a LinkedIn URL if actually retrieved via Google Search in this session. If not found via search, write "LinkedIn: [not found in search]" instead of guessing.
         METHOD: Search site:linkedin.com/in/ "[Founder Name]" "[Company]", also search for podcast transcripts, news articles, Crunchbase profiles, and previous exits. Only include facts traceable to a real search result. Return factual bios in Markdown.`, 'foundersAndTeam');
       updateAgent('foundersAndTeam', 'completed', 'Founders identified.');
-      return { raw, sources: [] };
+      return { raw, sources };
     } catch (e: any) {
       updateAgent('foundersAndTeam', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
     }
-  };
+  }; // end runFoundersTeamAgent
 
   const runSearchTrendsAgent = async (): Promise<{ raw: string, sources: string[] }> => {
     updateAgent('searchTrends', 'running', 'Fetching Google Trends data (EN + NL)...');
     try {
-      const raw = await searchRaw(`${directiveBlock}You are a Google Trends data analyst and market intelligence expert. Retrieve and interpret REAL, LIVE Google Trends data for: "${category.name}".
+      const { text: raw, sources } = await searchRaw(`You are a Google Trends data analyst and market intelligence expert. Retrieve and interpret REAL, LIVE Google Trends data for: "${category.name}".
 
 MANDATORY SEARCHES:
 1. https://trends.google.com/trends/explore?q=${encodeURIComponent(category.name)}&geo=NL
@@ -429,12 +449,12 @@ Return a comprehensive markdown report covering: interest scores (NL + global), 
 
 ANTI-HALLUCINATION: Only return scores retrieved from real searches. Write "[score not retrieved]" if data not accessible.`, 'searchTrends');
       updateAgent('searchTrends', 'completed', 'Search trends data retrieved.');
-      return { raw, sources: [] };
+      return { raw, sources };
     } catch (e: any) {
       updateAgent('searchTrends', 'error', e.message);
       return { raw: `Error: ${e.message}`, sources: [] };
     }
-  };
+  }; // end runSearchTrendsAgent
 
   // Run all 10 agents simultaneously — retryWithBackoff auto-retries any rate-limit errors
   updateProgress({ overall: 'Launching all 10 agents simultaneously...' });
@@ -498,8 +518,7 @@ export async function discoverDtcCategories(
   getExistingCategoryNames: () => string[],
   onProgress: (prog: DiscoveryProgress) => void,
   onCategoryDiscovered: (cat: Partial<Category>) => void,
-  signal: AbortSignal,
-  brainEntries: BrainEntry[] = []
+  signal: AbortSignal
 ): Promise<void> {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error("No Gemini API key configured. Add your key in Settings.");
@@ -578,9 +597,6 @@ export async function discoverDtcCategories(
 
   let searchedSectors = new Set<string>();
 
-  // Compile active directives for discovery scope — prepended to all discovery prompts.
-  const discoveryDirectiveBlock = compileDirectivePrompt(brainEntries, 'discovery');
-
   while (!signal.aborted) {
     const existingCategoryNames = getExistingCategoryNames();
     // Pass ALL existing names to the model — category names are short strings (~30 chars each)
@@ -609,7 +625,7 @@ export async function discoverDtcCategories(
       // in a single call. We must do two separate calls.
       const sectorRawResp = await safeGenerate({
         model: modelName,
-        contents: `${discoveryDirectiveBlock}You are an endless private-equity sector mapper. Search the web to verify each sector has real, operating DTC subscription businesses before listing it.
+        contents: `You are an endless private-equity sector mapper. Search the web to verify each sector has real, operating DTC subscription businesses before listing it.
 
 Research and describe 8 DISTINCT consumer product sectors where subscription/high-loyalty DTC models are viable and proven.
 VARIETY RULE: Rotate across drastically different areas — Beauty, Pet care, Baby products, Vitamins/supplements, Home goods, Wearables, Coffee/food, Skincare, Fitness, Men's grooming, Women's health, Gaming accessories, Office products, Cleaning products, Sleep aids, Oral care, Kids education, Hobby crafts — never cluster in one theme.
@@ -691,7 +707,7 @@ For each sector provide: the sector name, and at least one real named DTC busine
         // Cannot combine responseMimeType/responseSchema with googleSearch — two-pass required.
         const catRawResp = await safeGenerate({
           model: modelName,
-          contents: `${discoveryDirectiveBlock}${userPrompt}
+          contents: `${userPrompt}
 
 ${avoidList}
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Category, Weights } from '../types';
+import { Category, Weights, BrainEntry } from '../types';
 import { calculateDecisionScore, calculateLtvCac } from '../utils';
 import { Trophy, TrendingUp, Users, Zap, Radar, AlertCircle, CheckCircle2, Loader2, FileText, RefreshCw, Copy } from 'lucide-react';
 import { ScoreRing } from '../components/ScoreRing';
@@ -12,6 +12,7 @@ interface Props {
   categories: Category[];
   weights: Weights;
   maxClv: number;
+  brainEntries: BrainEntry[];
 }
 
 /** Smoothly count up from 0 to target over ~700ms */
@@ -39,7 +40,7 @@ function useCountUp(target: number, duration = 700) {
   return value;
 }
 
-export function DashboardView({ categories, weights, maxClv }: Props) {
+export function DashboardView({ categories, weights, maxClv, brainEntries }: Props) {
   const activeCategories = categories.filter(c => c.status !== 'Killed');
   
   const totalCategories = categories.length;
@@ -87,7 +88,7 @@ export function DashboardView({ categories, weights, maxClv }: Props) {
     setSignalError(null);
     const topNames = topListAll.slice(0, 5).map(c => c.name);
     try {
-      const found = await scanMarketSignals(topNames, setSignalMsg);
+      const found = await scanMarketSignals(topNames, setSignalMsg, brainEntries);
       setSignals(found);
       localStorage.setItem('flashface_market_signals', JSON.stringify(found));
       setSignalStatus('done');
@@ -107,7 +108,7 @@ export function DashboardView({ categories, weights, maxClv }: Props) {
     if (memoStatus === 'generating') return;
     setMemoStatus('generating');
     try {
-      const text = await generateInvestmentMemo(categories, weights, maxClv);
+      const text = await generateInvestmentMemo(categories, weights, maxClv, brainEntries);
       setMemo(text);
       setMemoStatus('done');
       setShowMemo(true);

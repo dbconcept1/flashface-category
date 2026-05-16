@@ -11,6 +11,8 @@
 
 import { GoogleGenAI } from '@google/genai';
 import { getApiKey, checkBudget, recordGeminiUsageFromResponse } from '../lib/settings';
+import type { BrainEntry } from '../types';
+import { compileDirectivePrompt } from '../lib/directives';
 
 export type SignalType =
   | 'trend_rising'
@@ -54,6 +56,7 @@ export { SIGNAL_TYPE_LABELS };
 export async function scanMarketSignals(
   topCategories: string[],
   onProgress?: (msg: string) => void,
+  brainEntries: BrainEntry[] = [],
 ): Promise<MarketSignal[]> {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('Gemini API key not set');
@@ -63,8 +66,9 @@ export async function scanMarketSignals(
   onProgress?.(`Scanning live market signals for: ${top5.join(', ')}…`);
 
   const ai = new GoogleGenAI({ apiKey });
+  const directiveBlock = compileDirectivePrompt(brainEntries, 'signal');
 
-  const prompt = `You are an elite market intelligence analyst specializing in D2C subscription businesses in the Netherlands and EU.
+  const prompt = `${directiveBlock}You are an elite market intelligence analyst specializing in D2C subscription businesses in the Netherlands and EU.
 
 Today is ${new Date().toLocaleDateString('en-NL', { year: 'numeric', month: 'long', day: 'numeric' })}.
 

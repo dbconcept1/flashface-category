@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import type { FounderPodcast, PodcastEpisode } from "../types";
+import type { FounderPodcast, PodcastEpisode, BrainEntry } from "../types";
 import { getApiKey, checkBudget, recordGeminiUsageFromResponse } from "../lib/settings";
+import { compileDirectivePrompt } from "../lib/directives";
 
 async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
   let lastError: unknown;
@@ -35,7 +36,8 @@ type DiscoveredEpisode = Pick<PodcastEpisode,
 export async function discoverFounderEpisodes(
   founder: FounderPodcast,
   existingUrls: Set<string>,
-  onStatus: (msg: string) => void
+  onStatus: (msg: string) => void,
+  brainEntries: BrainEntry[] = []
 ): Promise<DiscoveredEpisode[]> {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error("No Gemini API key configured. Add your key in Settings.");
@@ -78,10 +80,12 @@ export async function discoverFounderEpisodes(
 
   onStatus(`Searching YouTube for latest episodes from ${founder.founderName}...`);
 
+  const intelDirectiveBlock = compileDirectivePrompt(brainEntries, 'intel');
+
   // Pass 1: grounded search — raw text only (cannot combine schema + search in one call)
   const searchResponse = await safeGenerate({
     model: modelName,
-    contents: `Search for the 6 most recent YouTube podcast episodes featuring or hosted by: "${founder.founderName}".
+    contents: `${intelDirectiveBlock}Search for the 6 most recent YouTube podcast episodes featuring or hosted by: "${founder.founderName}".
 Channel / search hint: ${founder.channelQuery}
 
 Run ALL of these searches and list every episode you find:
@@ -159,7 +163,8 @@ ${rawSearchText.slice(0, 25000)}`,
 export async function extractEpisodeInsights(
   episode: PodcastEpisode,
   categoryNames: string[],
-  onStatus: (msg: string) => void
+  onStatus: (msg: string) => void,
+  brainEntries: BrainEntry[] = []
 ): Promise<Partial<PodcastEpisode>> {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error("No Gemini API key configured. Add your key in Settings.");
@@ -216,7 +221,7 @@ export async function extractEpisodeInsights(
     required: ["summary", "keyTactics", "keyMetrics", "businessInsights", "fullReport"]
   };
 
-  const extractionPrompt = `You are a DTC subscription business intelligence analyst. Extract maximum actionable value from this podcast for a DTC brand builder.
+  const extractionPrompt = `${compileDirectivePrompt(brainEntries, 'intel')}You are a DTC subscription business intelligence analyst. Extract maximum actionable value from this podcast for a DTC brand builder.
 
 Podcast: "${episode.title}" by ${episode.founderName}
 

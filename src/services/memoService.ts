@@ -9,13 +9,15 @@
 
 import { GoogleGenAI } from '@google/genai';
 import { getApiKey, checkBudget, recordGeminiUsageFromResponse } from '../lib/settings';
-import type { Category, Weights } from '../types';
+import type { Category, Weights, BrainEntry } from '../types';
 import { calculateDecisionScore, calculateLtvCac } from '../utils';
+import { compileDirectivePrompt } from '../lib/directives';
 
 export async function generateInvestmentMemo(
   categories: Category[],
   weights: Weights,
   maxClv: number,
+  brainEntries: BrainEntry[] = [],
 ): Promise<string> {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('Gemini API key not set');
@@ -39,8 +41,9 @@ ${c.agentResults?.marketDynamics ? `- Market Intelligence: ${c.agentResults.mark
 ${c.notes ? `- Notes: ${c.notes.slice(0, 300)}` : ''}`).join('\n');
 
   const ai = new GoogleGenAI({ apiKey });
+  const directiveBlock = compileDirectivePrompt(brainEntries, 'memo');
 
-  const prompt = `You are a senior investment analyst at a top-tier European PE firm specializing in D2C subscription businesses.
+  const prompt = `${directiveBlock}You are a senior investment analyst at a top-tier European PE firm specializing in D2C subscription businesses.
 
 Generate a concise, professional investment memo for a Dutch DTC subscription founder evaluating the following top-scored categories. The founder is deciding where to invest their first €100K to build a scalable subscription business in the Netherlands.
 

@@ -74,6 +74,7 @@ interface RadarViewProps {
   onAddBrainEntry: (entry: BrainEntry) => void;
   onNavigateToCompanies: () => void;
   onNavigateToFounders: () => void;
+  brainEntries: BrainEntry[];
 }
 
 // ─── Copy button ──────────────────────────────────────────────────────────────
@@ -460,6 +461,7 @@ export function RadarView({
   onAddBrainEntry,
   onNavigateToCompanies,
   onNavigateToFounders,
+  brainEntries,
 }: RadarViewProps) {
   const [tab, setTab] = useState<'companies' | 'investors'>('companies');
   const [selectedRegions, setSelectedRegions] = useState<Set<RegionSelectOption>>(new Set(['ALL']));
@@ -511,10 +513,10 @@ export function RadarView({
 
     try {
       if (tab === 'companies') {
-        const found = await scanCompanies(regions, addLog);
+        const found = await scanCompanies(regions, addLog, brainEntries);
         onUpdateCompanies([...found, ...radarCompanies]);
       } else {
-        const found = await scanInvestors(regions, addLog);
+        const found = await scanInvestors(regions, addLog, brainEntries);
         onUpdateInvestors([...found, ...radarInvestors]);
       }
     } catch (e: any) {

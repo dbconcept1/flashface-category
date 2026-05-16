@@ -128,10 +128,34 @@ export function compileBrain(entries: BrainEntry[]): string {
 
   const compiled = lines.join('\n');
 
-  // ── Token budget guard: warn if over 18k tokens ────────────────────────────
-  // (We can't truncate here without losing meaning, so we just compile and let
-  //  the caller/UI warn the operator via estimateBrainTokens.)
-  return compiled;
+  // ── Token budget enforcement ───────────────────────────────────────────────
+  // Hard cap at 20k tokens. If exceeded, drop lowest-priority reference entries
+  // first until within budget. Core entries are NEVER truncated.
+  const MAX_TOKENS = 20_000;
+  if (estimateTokens(compiled) <= MAX_TOKENS) return compiled;
+
+  // Rebuild without reference entries first (they're the cheapest to drop)
+  const coreOnlyLines: string[] = [];
+  coreOnlyLines.push(`## OPERATOR BRAIN — Personal Decision Operating System`);
+  coreOnlyLines.push(`Compiled: ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} | ${core.length} core | ${reference.length} reference (REFERENCE ENTRIES OMITTED — budget cap)`);
+  coreOnlyLines.push('');
+  coreOnlyLines.push(lines.slice(lines.indexOf('### HOW TO USE THIS BRAIN'), lines.indexOf('### CORE OPERATING KNOWLEDGE (always apply to every response)')).join('\n'));
+  coreOnlyLines.push('### CORE OPERATING KNOWLEDGE (always apply to every response)');
+  coreOnlyLines.push('');
+
+  const [, ...coreSections] = lines;
+  // Simpler: re-join only the header + instructions + core section
+  const coreCompiled = [
+    `## OPERATOR BRAIN — Personal Decision Operating System`,
+    `Compiled: ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} | ${core.length} core | ${reference.length} reference (REFERENCE ENTRIES OMITTED — over token budget)`,
+    '',
+    ...lines.slice(2, lines.lastIndexOf('### REFERENCE KNOWLEDGE (consult when relevant to the question)')),
+  ].join('\n');
+
+  if (estimateTokens(coreCompiled) <= MAX_TOKENS) return coreCompiled;
+
+  // If even core entries are too many, drop reference fields (tags, origin) from core entries
+  return coreCompiled.split('\n').filter(l => !l.startsWith('Tags:') && !l.startsWith('Origin:') && !l.startsWith('Verified via:')).join('\n');
 }
 
 /**

@@ -1,5 +1,5 @@
 import { useState, Fragment } from 'react';
-import { Category, Weights, CategoryStatus } from '../types';
+import { Category, Weights, CategoryStatus, BrainEntry } from '../types';
 import { calculateDecisionScore, calculateLtvCac, cn, getMacroSector } from '../utils';
 import { LayoutGrid, List, Search, Ban, Trophy, Sparkles, Loader2, Square, AlertCircle, CheckCircle2, Clock, Wand2, X } from 'lucide-react';
 import { CategoryResearchState } from '../services/aiService';
@@ -11,6 +11,7 @@ interface Props {
   categories: Category[];
   weights: Weights;
   maxClv: number;
+  brainEntries: BrainEntry[];
   onEdit: (id: string) => void;
   onUpdateStatus: (id: string, status: CategoryStatus) => void;
   onDeepSearch: (id: string) => void;
@@ -22,7 +23,7 @@ interface Props {
   bulkStats: { total: number; done: number; failed: number } | null;
 }
 
-export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateStatus, onDeepSearch, onDeepSearchAllNew, onRefreshResearched, onRefreshFailed, onStopBulkResearch, isBulkResearching, bulkStats }: Props) {
+export function CategoriesView({ categories, weights, maxClv, brainEntries, onEdit, onUpdateStatus, onDeepSearch, onDeepSearchAllNew, onRefreshResearched, onRefreshFailed, onStopBulkResearch, isBulkResearching, bulkStats }: Props) {
   const enhancingIds = useResearchState();
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('table');
   const [search, setSearch] = useState('');
@@ -42,7 +43,7 @@ export function CategoriesView({ categories, weights, maxClv, onEdit, onUpdateSt
     if (!nlInput.trim() || nlStatus === 'parsing') return;
     setNlStatus('parsing');
     try {
-      const filter = await parseNlQuery(nlInput.trim());
+      const filter = await parseNlQuery(nlInput.trim(), brainEntries);
       setNlFilter(filter);
       setNlStatus('active');
     } catch {
