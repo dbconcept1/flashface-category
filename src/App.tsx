@@ -659,7 +659,8 @@ export default function App() {
             }
             return c;
           }));
-        }
+        },
+        brainEntries
       );
 
       succeeded = true;
@@ -853,7 +854,8 @@ export default function App() {
         () => categoriesRef.current.map(c => c.name),
         (prog) => setDiscoveryProgress(prog),
         (foundCat) => handleImport([foundCat]),
-        controller.signal
+        controller.signal,
+        brainEntries
       );
     } catch (e: any) {
       if (e.name !== 'AbortError') {

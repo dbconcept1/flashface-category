@@ -264,6 +264,14 @@ function EntryCard({
       )}
       onClick={onExpand}
     >
+      {/* Directive banner */}
+      {entry.tags.some(t => t.startsWith('directive:')) && (
+        <div className="flex items-center gap-1.5 px-2 py-1 bg-amber-900/20 border border-amber-900/40 rounded-lg">
+          <span className="text-amber-400 text-[10px] font-bold tracking-widest uppercase">⚡ Auto-Injected Directive</span>
+          <span className="text-amber-700 text-[10px]">{entry.tags.filter(t => t.startsWith('directive:')).map(t => t.replace('directive:', '')).join(', ')}</span>
+        </div>
+      )}
+
       {/* Header row */}
       <div className="flex items-center justify-between gap-2">
         <TypeBadge type={entry.type} />
@@ -297,7 +305,7 @@ function EntryCard({
       {entry.tags.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {entry.tags.slice(0, 4).map(tag => (
-            <span key={tag} className="px-1.5 py-0.5 bg-[#1a1a1a] text-[#3a3a3a] text-[10px] rounded">#{tag}</span>
+            <span key={tag} className={`px-1.5 py-0.5 text-[10px] rounded ${tag.startsWith('directive:') ? 'bg-amber-900/40 text-amber-400 font-semibold' : 'bg-[#1a1a1a] text-[#3a3a3a]'}`}>#{tag}</span>
           ))}
           {entry.tags.length > 4 && (
             <span className="text-[#2a2a2a] text-[10px] self-center">+{entry.tags.length - 4}</span>
@@ -722,7 +730,7 @@ function EntryDetail({
         {entry.tags.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {entry.tags.map(tag => (
-              <span key={tag} className="px-2 py-1 bg-[#1a1a1a] text-[#484848] text-xs rounded-lg">#{tag}</span>
+              <span key={tag} className={`px-2 py-1 text-xs rounded-lg ${tag.startsWith('directive:') ? 'bg-amber-900/40 text-amber-400 font-semibold' : 'bg-[#1a1a1a] text-[#484848]'}`}>#{tag}</span>
             ))}
           </div>
         )}
