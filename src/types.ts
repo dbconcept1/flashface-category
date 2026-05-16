@@ -427,6 +427,105 @@ export type IdeaTag =
   | 'strategy' | 'product' | 'creative' | 'marketing'
   | 'operations' | 'tech' | 'brand' | 'content' | 'other';
 
+// ─── Intel Radar ──────────────────────────────────────────────────────────────
+
+/** Supported target regions for radar scans. */
+export type RadarRegion = 'NL' | 'IE' | 'FR' | 'DE' | 'US' | 'BR' | 'OTHER';
+
+/** How a hidden investor built or stores their capital. */
+export type RadarInvestorType =
+  | 'angel'          // Individual angel investor
+  | 'family-office'  // Family office / generational wealth
+  | 'operator'       // Industry operator with capital to deploy
+  | 'exit-founder'   // Built and exited a company, now investing quietly
+  | 'hnwi'           // High-net-worth individual, source varied
+  | 'unknown';
+
+/**
+ * A scaling company discovered by the Intel Radar that has NOT yet been
+ * covered prominently by major tech/business press.
+ */
+export interface RadarCompany {
+  id: string;
+  companyName: string;
+  websiteUrl?: string;
+  /** ISO country code or full country name. */
+  country: string;
+  region: RadarRegion;
+  industry: string;
+  /** 1-2 sentence description of what they do and who they serve. */
+  description: string;
+  foundedYear?: string;
+  /** Revenue range if signal found, e.g. "$1M–$5M ARR". */
+  estimatedRevenue?: string;
+  /** Approximate headcount, e.g. "11–50". */
+  employeeCount?: string;
+  /** Bootstrapped / Pre-seed / Seed / Series A / Unknown */
+  fundingStatus?: string;
+  /** Concrete, verifiable evidence items — each ends with a source URL. */
+  growthSignals: string[];
+  /** Why this company hasn't been featured in mainstream press yet. */
+  whyNotFamous: string;
+  founderName?: string;
+  /**
+   * Ready-to-paste Google search query to find the founder on LinkedIn.
+   * Format: "Firstname Lastname" "CompanyName" site:linkedin.com/in
+   */
+  founderLinkedinSearch?: string;
+  /**
+   * Ready-to-paste Google search query to find the company on LinkedIn.
+   * Format: "CompanyName" site:linkedin.com/company
+   */
+  linkedinSearchQuery: string;
+  sources: string[];
+  // ── Promotion state (filled when user promotes to existing modules) ─────────
+  linkedCompanyId?: string;
+  linkedFounderId?: string;
+  linkedCategoryId?: string;
+  linkedBrainEntryId?: string;
+  scannedAt: string;
+  createdAt: string;
+}
+
+/**
+ * A hidden investor discovered by the Intel Radar — someone with real capital
+ * who is NOT on mainstream investor lists, not a named VC partner, and rarely
+ * covered by tech press.
+ */
+export interface RadarInvestor {
+  id: string;
+  fullName: string;
+  /** ISO country code or full country name. */
+  country: string;
+  region: RadarRegion;
+  investorType: RadarInvestorType;
+  /** What they tend to back: sector, stage, geography. */
+  investmentFocus: string;
+  /** 2-3 sentences: how they built or inherited their wealth. */
+  background: string;
+  /** The specific signal(s) that indicate they have capital to invest. */
+  evidenceOfCapital: string;
+  /** Evidence-based estimate, e.g. "€250k–€1M per deal". */
+  estimatedCapacity?: string;
+  /**
+   * EXACT Google search to find their LinkedIn profile — ready to paste.
+   * Format: "Full Name" site:linkedin.com/in OR "Full Name" "Company" investor
+   */
+  linkedinSearchQuery: string;
+  /** Direct LinkedIn URL if found during scan. */
+  linkedinUrl?: string;
+  /** How to best approach this person for a first connection / conversation. */
+  connectionApproach: string;
+  /** Why they don't appear on Midas List, AngelList spotlight, or VC directories. */
+  whyHidden: string;
+  sources: string[];
+  // ── Promotion state ──────────────────────────────────────────────────────────
+  linkedFounderId?: string;
+  linkedBrainEntryId?: string;
+  scannedAt: string;
+  createdAt: string;
+}
+
 /**
  * A single idea — can be a category exploration, creative brief,
  * product concept, or anything else worth capturing.

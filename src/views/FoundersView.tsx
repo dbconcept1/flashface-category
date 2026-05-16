@@ -10,7 +10,7 @@ import { useState, useRef, useMemo, useEffect } from 'react';
 import type { FounderProfile, CompanyProfile } from '../types';
 import {
   UserCircle2, Plus, X, ExternalLink, Loader2, Sparkles,
-  Search, Edit3, Trash2, AlertCircle, Link2,
+  Search, Edit3, Trash2, AlertCircle, Link2, Building2,
 } from 'lucide-react';
 import { cn } from '../utils';
 import { researchFounder } from '../services/reputationService';
@@ -54,14 +54,27 @@ function Avatar({ founder, size = 'md' }: { founder: FounderProfile; size?: 'sm'
 
 // ─── Add founder modal ───────────────────────────────────────────────────────
 
-function AddFounderModal({ onAdd, onClose }: { onAdd: (f: Omit<FounderProfile, 'id' | 'createdAt' | 'updatedAt'>) => void; onClose: () => void }) {
+function AddFounderModal({ onAdd, onClose, companies }: {
+  onAdd: (f: Omit<FounderProfile, 'id' | 'createdAt' | 'updatedAt'>) => void;
+  onClose: () => void;
+  companies: CompanyProfile[];
+}) {
   const [name, setName]               = useState('');
   const [linkedinUrl, setLinkedinUrl] = useState('');
   const [company, setCompany]         = useState('');
   const [role, setRole]               = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  const suggestions = useMemo(() => {
+    if (!company.trim() || companies.length === 0) return [];
+    const q = company.toLowerCase();
+    return companies.filter(c => c.name.toLowerCase().includes(q)).slice(0, 5);
+  }, [company, companies]);
 
   const submit = () => {
     if (!name.trim()) return;
+    // Find matching company profile ID if name exactly matches
+    const matchedCompany = companies.find(c => c.name.toLowerCase() === company.trim().toLowerCase());
     onAdd({
       name: name.trim(),
       linkedinUrl: linkedinUrl.trim() || undefined,
@@ -70,6 +83,7 @@ function AddFounderModal({ onAdd, onClose }: { onAdd: (f: Omit<FounderProfile, '
       notes: '',
       pastCompanies: [],
       keyInsights: [],
+      linkedCompanyIds: matchedCompany ? [matchedCompany.id] : [],
     });
     onClose();
   };
@@ -97,12 +111,31 @@ function AddFounderModal({ onAdd, onClose }: { onAdd: (f: Omit<FounderProfile, '
             className="w-full px-3 py-2.5 bg-[#080808] border border-gray-800 rounded-xl text-white text-sm focus:outline-none focus:border-gray-600 placeholder:text-gray-700"
           />
           <div className="grid grid-cols-2 gap-2">
-            <input
-              value={company}
-              onChange={e => setCompany(e.target.value)}
-              placeholder="Current company"
-              className="px-3 py-2.5 bg-[#080808] border border-gray-800 rounded-xl text-white text-sm focus:outline-none focus:border-gray-600 placeholder:text-gray-700"
-            />
+            <div className="relative">
+              <input
+                value={company}
+                onChange={e => { setCompany(e.target.value); setShowSuggestions(true); }}
+                onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                onFocus={() => setShowSuggestions(true)}
+                placeholder="Current company"
+                className="w-full px-3 py-2.5 bg-[#080808] border border-gray-800 rounded-xl text-white text-sm focus:outline-none focus:border-gray-600 placeholder:text-gray-700"
+              />
+              {showSuggestions && suggestions.length > 0 && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-[#111] border border-gray-700 rounded-xl overflow-hidden z-10 shadow-xl">
+                  {suggestions.map(s => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-gray-800 flex items-center gap-2"
+                      onMouseDown={() => { setCompany(s.name); setShowSuggestions(false); }}
+                    >
+                      <Link2 className="w-3 h-3 text-orange-400 shrink-0" />
+                      {s.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <input
               value={role}
               onChange={e => setRole(e.target.value)}
@@ -135,12 +168,14 @@ function FounderModal({
   onUpdate,
   onDelete,
   onClose,
+  onLinkFounderCompanies,
 }: {
   founder: FounderProfile;
   companies: CompanyProfile[];
   onUpdate: (updater: (current: FounderProfile) => FounderProfile) => void;
   onDelete: () => void;
   onClose: () => void;
+  onLinkFounderCompanies?: (founderId: string, companyIds: string[]) => void;
 }) {
   const [edit, setEdit]         = useState(false);
   const [nameVal, setNameVal]   = useState(founder.name);
@@ -151,17 +186,39 @@ function FounderModal({
   const [notes, setNotes]       = useState(founder.notes);
   const [isResearching, setIsResearching] = useState(false);
   const [researchError, setResearchError] = useState<string | null>(null);
+  const [companySearch, setCompanySearch] = useState('');
+  const [showCompanySearch, setShowCompanySearch] = useState(false);
   const lastSavedNotesRef = useRef(founder.notes);
-
-  useEffect(() => {
-    lastSavedNotesRef.current = founder.notes;
-    setNotes(founder.notes);
-  }, [founder.id, founder.notes]);
 
   const linkedCompanies = useMemo(
     () => companies.filter(c => founder.linkedCompanyIds?.includes(c.id)),
     [companies, founder.linkedCompanyIds]
   );
+
+  const companySuggestions = useMemo(() => {
+    if (!companySearch.trim()) return companies.filter(c => !founder.linkedCompanyIds?.includes(c.id)).slice(0, 6);
+    const q = companySearch.toLowerCase();
+    return companies
+      .filter(c => !founder.linkedCompanyIds?.includes(c.id) && c.name.toLowerCase().includes(q))
+      .slice(0, 6);
+  }, [companies, companySearch, founder.linkedCompanyIds]);
+
+  const linkCompany = (companyId: string) => {
+    const newIds = [...new Set([...(founder.linkedCompanyIds ?? []), companyId])];
+    onLinkFounderCompanies?.(founder.id, newIds);
+    setCompanySearch('');
+    setShowCompanySearch(false);
+  };
+
+  const unlinkCompany = (companyId: string) => {
+    const newIds = (founder.linkedCompanyIds ?? []).filter(id => id !== companyId);
+    onLinkFounderCompanies?.(founder.id, newIds);
+  };
+
+  useEffect(() => {
+    lastSavedNotesRef.current = founder.notes;
+    setNotes(founder.notes);
+  }, [founder.id, founder.notes]);
 
   const saveEdit = () => {
     onUpdate(current => ({
@@ -286,16 +343,65 @@ function FounderModal({
           )}
 
           {/* Linked company profiles */}
-          {linkedCompanies.length > 0 && (
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-600 mb-2">Linked Profiles</p>
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-600">Linked Company Profiles</p>
+              {onLinkFounderCompanies && (
+                <button
+                  onClick={() => setShowCompanySearch(v => !v)}
+                  className="text-[10px] text-orange-400/70 hover:text-orange-400 flex items-center gap-1"
+                >
+                  <Plus className="w-3 h-3" /> Link
+                </button>
+              )}
+            </div>
+            {showCompanySearch && onLinkFounderCompanies && (
+              <div className="mb-2 relative">
+                <input
+                  autoFocus
+                  value={companySearch}
+                  onChange={e => setCompanySearch(e.target.value)}
+                  placeholder="Search company profiles…"
+                  className="w-full px-3 py-2 bg-[#080808] border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-gray-600"
+                />
+                {companySuggestions.length > 0 && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-[#111] border border-gray-700 rounded-xl overflow-hidden z-10 shadow-xl">
+                    {companySuggestions.map(c => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-gray-800 flex items-center gap-2"
+                        onClick={() => linkCompany(c.id)}
+                      >
+                        <Building2 className="w-3 h-3 text-orange-400 shrink-0" />
+                        {c.name}
+                        {c.industry && <span className="text-gray-600 text-xs ml-auto">{c.industry}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {companySuggestions.length === 0 && companySearch && (
+                  <p className="text-xs text-gray-700 mt-1 px-1">No matches in Company Profiles</p>
+                )}
+              </div>
+            )}
+            {linkedCompanies.length > 0 ? (
               <div className="flex flex-wrap gap-1.5">
                 {linkedCompanies.map(c => (
-                  <span key={c.id} className="px-2.5 py-1 bg-orange-500/10 border border-orange-500/20 rounded-full text-xs text-orange-400">{c.name}</span>
+                  <span key={c.id} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-orange-500/10 border border-orange-500/20 rounded-full text-xs text-orange-400">
+                    {c.name}
+                    {onLinkFounderCompanies && (
+                      <button onClick={() => unlinkCompany(c.id)} className="hover:text-rose-400 transition-colors">
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </span>
                 ))}
               </div>
-            </div>
-          )}
+            ) : (
+              <p className="text-xs text-gray-700 italic">No companies linked yet</p>
+            )}
+          </div>
 
           {/* Notes */}
           <div>
@@ -411,9 +517,10 @@ interface Props {
   founders: FounderProfile[];
   companies: CompanyProfile[];
   onChange: React.Dispatch<React.SetStateAction<FounderProfile[]>>;
+  onLinkFounderCompanies?: (founderId: string, companyIds: string[]) => void;
 }
 
-export function FoundersView({ founders, companies, onChange }: Props) {
+export function FoundersView({ founders, companies, onChange, onLinkFounderCompanies }: Props) {
   const [search, setSearch]             = useState('');
   const [showAdd, setShowAdd]           = useState(false);
   const [selectedId, setSelectedId]     = useState<string | null>(null);
@@ -497,7 +604,7 @@ export function FoundersView({ founders, companies, onChange }: Props) {
 
       {/* Modals */}
       {showAdd && (
-        <AddFounderModal onAdd={addFounder} onClose={() => setShowAdd(false)} />
+        <AddFounderModal onAdd={addFounder} onClose={() => setShowAdd(false)} companies={companies} />
       )}
       {selected && (
         <FounderModal
@@ -506,6 +613,7 @@ export function FoundersView({ founders, companies, onChange }: Props) {
           onUpdate={(updater) => updateFounder(selected.id, updater)}
           onDelete={() => deleteFounder(selected.id)}
           onClose={() => setSelectedId(null)}
+          onLinkFounderCompanies={onLinkFounderCompanies}
         />
       )}
     </div>

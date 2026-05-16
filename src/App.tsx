@@ -10,7 +10,7 @@ import { ExportView } from './views/ExportView';
 import { PromptsView } from './views/PromptsView';
 import { DiscoveryView } from './views/DiscoveryView';
 import { cn } from './utils';
-import { Target, LayoutGrid, BarChart2, Plus, Settings2, FileText, DownloadCloud, Loader2, Terminal, Radar, Menu, CheckCircle2, AlertCircle, Cloud, Euro, MessageSquare, Brain, TrendingUp, Headphones, Layers } from 'lucide-react';
+import { Target, LayoutGrid, BarChart2, Plus, Settings2, FileText, DownloadCloud, Loader2, Terminal, Radar, Menu, CheckCircle2, AlertCircle, Cloud, Euro, MessageSquare, Brain, TrendingUp, Headphones, Telescope } from 'lucide-react';
 import { agenticDeepResearchCategory, discoverDtcCategories, createInitialProgress } from './services/aiService';
 import stringSimilarity from 'string-similarity';
 import { lsLoadCategories, saveAllLayers, loadBestCategories, flushGithubSave } from './lib/db';
@@ -22,8 +22,8 @@ import { FinanceView } from './views/FinanceView';
 import { BrandTrackerView } from './views/BrandTrackerView';
 import { CompanyProfilesView } from './views/CompanyProfilesView';
 import { IdeasView } from './views/IdeasView';
-import { MarketLensView } from './views/MarketLensView';
 import type { IntelNote, FinanceScenario, TrackedBrand, CompanyProfile, Idea, FounderPodcast, PodcastEpisode, BrainEntry, BrainConversation, BrainEntryType } from './types';
+import { extractFoundersFromResearch, buildIntelContext } from './services/autoIntelService';
 import { loadBestBrain, saveBrainAllLayers } from './lib/brainDb';
 import { loadBestConversations, saveConversationsAllLayers } from './lib/conversationDb';
 import { syncChatGptConnectorExtras } from './lib/chatgptConnector';
@@ -39,8 +39,10 @@ import { FoundersView } from './views/FoundersView';
 import type { FounderProfile } from './types';
 import { scanCompanyReputation } from './services/reputationService';
 import { UserCircle2 } from 'lucide-react';
+import { RadarView } from './views/RadarView';
+import type { RadarCompany, RadarInvestor } from './types';
 
-type ViewMode = 'dashboard' | 'categories' | 'comparison' | 'edit' | 'import' | 'export' | 'prompts' | 'discovery' | 'settings' | 'chatgpt' | 'brain' | 'intel' | 'finance' | 'brands' | 'companies' | 'ideas' | 'podcasts' | 'founders' | 'marketlens';
+type ViewMode = 'dashboard' | 'categories' | 'comparison' | 'edit' | 'import' | 'export' | 'prompts' | 'discovery' | 'settings' | 'chatgpt' | 'brain' | 'intel' | 'finance' | 'brands' | 'companies' | 'ideas' | 'podcasts' | 'founders' | 'marketlens' | 'radar';
 
 const VIEW_TITLES: Partial<Record<ViewMode, string>> = {
   dashboard: 'Overview',
@@ -48,6 +50,7 @@ const VIEW_TITLES: Partial<Record<ViewMode, string>> = {
   comparison: 'Comparison Matrix',
   marketlens: 'Market Opportunity Lens',
   discovery: 'Discovery Swarm',
+  radar: 'Intel Radar',
   import: 'Import Data',
   export: 'Export Data',
   prompts: 'AI Prompts',
@@ -113,6 +116,12 @@ export default function App() {
   const [founders, setFounders] = useState<FounderProfile[]>(() => {
     try { return JSON.parse(localStorage.getItem('flashface_founders') || '[]'); } catch { return []; }
   });
+  const [radarCompanies, setRadarCompanies] = useState<RadarCompany[]>(() => {
+    try { return JSON.parse(localStorage.getItem('flashface_radar_companies') || '[]'); } catch { return []; }
+  });
+  const [radarInvestors, setRadarInvestors] = useState<RadarInvestor[]>(() => {
+    try { return JSON.parse(localStorage.getItem('flashface_radar_investors') || '[]'); } catch { return []; }
+  });
   const [founderPodcasts, setFounderPodcasts] = useState<FounderPodcast[]>(() => {
     try { return JSON.parse(localStorage.getItem('flashface_podcasts') || '[]'); } catch { return []; }
   });
@@ -159,6 +168,8 @@ export default function App() {
   useEffect(() => { localStorage.setItem('flashface_companies', JSON.stringify(companyProfiles)); }, [companyProfiles]);
   useEffect(() => { localStorage.setItem('flashface_ideas', JSON.stringify(ideas)); }, [ideas]);
   useEffect(() => { localStorage.setItem('flashface_founders', JSON.stringify(founders)); }, [founders]);
+  useEffect(() => { localStorage.setItem('flashface_radar_companies', JSON.stringify(radarCompanies)); }, [radarCompanies]);
+  useEffect(() => { localStorage.setItem('flashface_radar_investors', JSON.stringify(radarInvestors)); }, [radarInvestors]);
   useEffect(() => { localStorage.setItem('flashface_podcasts', JSON.stringify(founderPodcasts)); }, [founderPodcasts]);
   useEffect(() => { localStorage.setItem('flashface_podcast_episodes', JSON.stringify(podcastEpisodes)); }, [podcastEpisodes]);
 
@@ -231,6 +242,21 @@ export default function App() {
       createdAt: note.createdAt,
       updatedAt: new Date().toISOString(),
     });
+  };
+
+  const handleSetFounderCompanyLinks = (founderId: string, companyIds: string[]) => {
+    const founder = founders.find(f => f.id === founderId);
+    const oldCompanyIds = founder?.linkedCompanyIds ?? [];
+    const removed = oldCompanyIds.filter(id => !companyIds.includes(id));
+    const added = companyIds.filter(id => !oldCompanyIds.includes(id));
+    setFounders(prev => prev.map(f =>
+      f.id === founderId ? { ...f, linkedCompanyIds: companyIds, updatedAt: new Date().toISOString() } : f
+    ));
+    setCompanyProfiles(prev => prev.map(c => {
+      if (removed.includes(c.id)) return { ...c, linkedFounderIds: (c.linkedFounderIds ?? []).filter(id => id !== founderId) };
+      if (added.includes(c.id)) return { ...c, linkedFounderIds: [...new Set([...(c.linkedFounderIds ?? []), founderId])] };
+      return c;
+    }));
   };
 
   const handleEnrichNote = async (id: string) => {
@@ -334,7 +360,24 @@ export default function App() {
     setPodcastEpisodes(prev => prev.map(e => e.id === episode.id ? { ...e, processingStatus: 'processing' as const } : e));
     try {
       const result = await extractEpisodeInsights(episode, categories.map(c => c.name), () => {});
-      setPodcastEpisodes(prev => prev.map(e => e.id === episode.id ? { ...e, ...result, processingStatus: 'complete' as const } : e));
+      const enriched = { ...episode, ...result };
+      setPodcastEpisodes(prev => prev.map(e => e.id === episode.id ? { ...enriched, processingStatus: 'complete' as const } : e));
+      // Auto-push extracted episode to Intel Brain
+      const autoNote: IntelNote = {
+        id: crypto.randomUUID(),
+        title: `[Podcast] ${enriched.founderName}: ${enriched.title}`,
+        content: enriched.fullReport || [
+          enriched.summary || '',
+          enriched.keyTactics?.length ? `## Key Tactics\n${enriched.keyTactics.map((t: string) => `- ${t}`).join('\n')}` : '',
+          enriched.keyMetrics?.length ? `## Key Metrics\n${enriched.keyMetrics.map((m: string) => `- ${m}`).join('\n')}` : '',
+          enriched.businessInsights?.length ? `## Business Insights\n${enriched.businessInsights.map((b: string) => `- ${b}`).join('\n')}` : '',
+        ].filter(Boolean).join('\n\n'),
+        source: 'Podcast',
+        tags: [enriched.founderName, ...(enriched.relevantCategories || [])].filter(Boolean),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      if (autoNote.content.trim()) handleAddNote(autoNote);
     } catch (err: any) {
       setPodcastEpisodes(prev => prev.map(e => e.id === episode.id ? { ...e, processingStatus: 'error' as const, errorMessage: err.message } : e));
     } finally {
@@ -634,6 +677,32 @@ export default function App() {
         }
         return c;
       }));
+      // Auto-extract founders mentioned in deep research and offer as FounderProfile stubs
+      const foundersText = enriched.agentResults?.foundersAndTeam || enriched.agentResults?.competitiveAnalysis || '';
+      if (foundersText) {
+        extractFoundersFromResearch(category.name, foundersText).then(extracted => {
+          if (!extracted.length) return;
+          const existingNames = new Set(founders.map(f => f.name.toLowerCase()));
+          const now = new Date().toISOString();
+          const newProfiles: FounderProfile[] = extracted
+            .filter(e => e.name && !existingNames.has(e.name.toLowerCase()))
+            .map(e => ({
+              id: crypto.randomUUID(),
+              name: e.name,
+              currentCompany: e.company || undefined,
+              currentRole: e.role || undefined,
+              linkedinUrl: e.linkedinHint || undefined,
+              notes: `Auto-extracted from deep research on "${category.name}"`,
+              pastCompanies: [],
+              keyInsights: [],
+              createdAt: now,
+              updatedAt: now,
+            }));
+          if (newProfiles.length > 0) {
+            setFounders(prev => [...prev, ...newProfiles]);
+          }
+        }).catch(() => {/* silent — non-critical */});
+      }
     } catch (e: any) {
       // Store error in state — no alert, no auto-clear. Stays red until user retries.
       setEnhancingIds(prev => ({
@@ -924,16 +993,17 @@ export default function App() {
                 onClick={() => setCurrentView('discovery')}
               />
               <NavItem
+                icon={<Telescope className="w-[15px] h-[15px]" />}
+                label="Intel Radar"
+                badge={(radarCompanies.length + radarInvestors.length) > 0 ? radarCompanies.length + radarInvestors.length : undefined}
+                active={currentView === 'radar'}
+                onClick={() => setCurrentView('radar')}
+              />
+              <NavItem
                 icon={<BarChart2 className="w-[15px] h-[15px]" />}
                 label="Comparison"
                 active={currentView === 'comparison'}
                 onClick={() => setCurrentView('comparison')}
-              />
-              <NavItem
-                icon={<Layers className="w-[15px] h-[15px]" />}
-                label="Market Lens"
-                active={currentView === 'marketlens'}
-                onClick={() => setCurrentView('marketlens')}
               />
             </NavSection>
 
@@ -1098,6 +1168,11 @@ export default function App() {
                 <p className="text-[10px] text-[#333] uppercase tracking-[0.1em] font-semibold">Finance</p>
                 <p className="text-xs text-[#3a3a3a] mt-0.5">{financeScenarios.length} scenario{financeScenarios.length !== 1 ? 's' : ''}</p>
               </div>
+            ) : currentView === 'radar' ? (
+              <div className="text-center py-1">
+                <p className="text-[10px] text-[#333] uppercase tracking-[0.1em] font-semibold">Intel Radar</p>
+                <p className="text-xs text-[#3a3a3a] mt-0.5">{radarCompanies.length + radarInvestors.length} result{(radarCompanies.length + radarInvestors.length) !== 1 ? 's' : ''}</p>
+              </div>
             ) : (
               <button
                 onClick={() => openEditor(null)}
@@ -1245,7 +1320,6 @@ export default function App() {
             {currentView === 'dashboard' && <DashboardView categories={categories} weights={ weights} maxClv={maxClv} />}
             {currentView === 'categories' && <CategoriesView categories={categories} weights={weights} maxClv={maxClv} onEdit={openEditor} onUpdateStatus={handleUpdateStatus} onDeepSearch={handleDeepSearch} onDeepSearchAllNew={handleDeepSearchAllNew} onRefreshResearched={handleRefreshResearched} onRefreshFailed={handleRefreshFailed} onStopBulkResearch={handleStopBulkResearch} isBulkResearching={isBulkResearching} bulkStats={bulkStats} />}
             {currentView === 'comparison' && <ComparisonView categories={categories} weights={weights} maxClv={maxClv} />}
-            {currentView === 'marketlens' && <MarketLensView categories={categories} />}
             {currentView === 'import' && <ImportView onImport={handleImport} state={importState} setState={setImportState} existingCategories={categories} />}
             {currentView === 'discovery' && (
               <DiscoveryView 
@@ -1266,7 +1340,7 @@ export default function App() {
             {currentView === 'brands' && <BrandTrackerView brands={trackedBrands} onAdd={handleAddBrand} onDelete={(id) => setTrackedBrands(prev => prev.filter(b => b.id !== id))} onRetry={handleRetryBrand} onAddToCategories={handleAddBrandToCategories} onToggleSchedule={handleToggleBrandSchedule} categories={categories} companies={companyProfiles} onLinkToCompany={handleLinkBrandToCompany} />}
             {currentView === 'companies' && <CompanyProfilesView profiles={companyProfiles} onChange={setCompanyProfiles} />}
             {currentView === 'ideas' && <IdeasView ideas={ideas} onAdd={(idea) => setIdeas(prev => [idea, ...prev])} onUpdate={(idea) => setIdeas(prev => prev.map(i => i.id === idea.id ? idea : i))} onDelete={(id) => setIdeas(prev => prev.filter(i => i.id !== id))} />}
-            {currentView === 'founders' && <FoundersView founders={founders} companies={companyProfiles} onChange={setFounders} />}
+            {currentView === 'founders' && <FoundersView founders={founders} companies={companyProfiles} onChange={setFounders} onLinkFounderCompanies={handleSetFounderCompanyLinks} />}
             {currentView === 'podcasts' && (
               <PodcastIntelView
                 founders={founderPodcasts}
@@ -1285,6 +1359,22 @@ export default function App() {
               />
             )}
             {currentView === 'finance' && <FinanceView scenarios={financeScenarios} onAdd={handleAddScenario} onDelete={handleDeleteScenario} />}
+            {currentView === 'radar' && (
+              <RadarView
+                radarCompanies={radarCompanies}
+                radarInvestors={radarInvestors}
+                onUpdateCompanies={setRadarCompanies}
+                onUpdateInvestors={setRadarInvestors}
+                companyProfiles={companyProfiles}
+                founders={founders}
+                onAddCompanyProfile={(profile) => setCompanyProfiles(prev => [profile, ...prev])}
+                onAddFounderProfile={(profile) => setFounders(prev => [profile, ...prev])}
+                onAddCategory={(partial) => handleImport([partial])}
+                onAddBrainEntry={handleAddBrainEntry}
+                onNavigateToCompanies={() => setCurrentView('companies')}
+                onNavigateToFounders={() => setCurrentView('founders')}
+              />
+            )}
             {currentView === 'edit' && (
               <EditCategoryView 
                 category={editingId ? categories.find(c => c.id === editingId) || null : null} 
